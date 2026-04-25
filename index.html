@@ -1,0 +1,1442 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>🏆 Álbum Panini Mundial 2026</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ─── REEMPLAZA ESTOS VALORES CON LOS DE TU PROYECTO FIREBASE ───
+const firebaseConfig = {
+  apiKey:            "AIzaSyBjEPXyVt7ABkJk8fm9EUEoMyMqSRG_oIU",
+  authDomain:        "panini-2026-41b58.firebaseapp.com",
+  projectId:         "panini-2026-41b58",
+  storageBucket:     "panini-2026-41b58.firebasestorage.app",
+  messagingSenderId: "594186262464",
+  appId:             "1:594186262464:web:0304fd3302ca6f7a6e5a25"
+};
+// ────────────────────────────────────────────────────────────────
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+let currentUser = null;
+let unsubscribe = null;
+
+// ── AUTH ──────────────────────────────────────────────────────
+window.loginGoogle = async () => {
+  try {
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
+  } catch(e) { console.error(e); showToast('❌ Error al iniciar sesión'); }
+};
+
+window.logoutUser = async () => {
+  if (!confirm('¿Cerrar sesión?')) return;
+  if (unsubscribe) unsubscribe();
+  await signOut(auth);
+};
+
+onAuthStateChanged(auth, async user => {
+  currentUser = user;
+  if (user) {
+    showApp(user);
+    subscribeToMyData(user.uid);
+    // Load profile
+    try {
+      const snap = await getDoc(doc(db, 'users', user.uid));
+      if (snap.exists() && snap.data().profile) {
+        window.userProfile = snap.data().profile;
+        const n = document.getElementById('user-name');
+        if (n && window.userProfile.nickname) n.textContent = window.userProfile.nickname;
+      }
+    } catch(e) {}
+    await loadAllUsersData();
+  } else {
+    showLogin();
+  }
+});
+
+// ── FIRESTORE ─────────────────────────────────────────────────
+async function saveToCloud(data) {
+  if (!currentUser) return;
+  await setDoc(doc(db, 'users', currentUser.uid), {
+    displayName: currentUser.displayName,
+    email: currentUser.email,
+    photoURL: currentUser.photoURL,
+    stickers: data,
+    updatedAt: Date.now()
+  }, { merge: true });
+}
+
+function subscribeToMyData(uid) {
+  if (unsubscribe) unsubscribe();
+  unsubscribe = onSnapshot(doc(db, 'users', uid), snap => {
+    if (snap.exists()) {
+      const data = snap.data().stickers || {};
+      // Convert: stored as { "MEX 1": 2 } (count per sticker)
+      window.collected = data;
+      renderAll();
+      updateStats();
+    }
+  });
+}
+
+window.loadAllUsersData = async () => {
+  if (!currentUser) return;
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    window.allUsersData = {};
+    snap.forEach(d => {
+      if (d.id !== currentUser.uid) {
+        window.allUsersData[d.id] = d.data();
+      }
+    });
+    renderTrades();
+  } catch(e) { console.error(e); }
+};
+
+window._saveToCloud = saveToCloud;
+
+window._saveProfileToCloud = async (profile) => {
+  if (!currentUser) return;
+  await setDoc(doc(db, 'users', currentUser.uid), {
+    profile,
+    displayName: currentUser.displayName,
+    email: currentUser.email,
+    photoURL: currentUser.photoURL,
+  }, { merge: true });
+};
+
+// ── UI HELPERS ────────────────────────────────────────────────
+function showLogin() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+}
+
+function showApp(user) {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('user-name').textContent = user.displayName || user.email;
+  const photo = document.getElementById('user-photo');
+  if (user.photoURL) { photo.src = user.photoURL; photo.style.display = 'block'; }
+  else photo.style.display = 'none';
+}
+
+</script>
+
+<style>
+:root {
+  --bg: #0a0a0f;
+  --surface: #12121a;
+  --surface2: #1a1a26;
+  --border: #2a2a40;
+  --gold: #f0c040;
+  --gold2: #e8a020;
+  --red: #e03030;
+  --green: #30c060;
+  --blue: #3080e8;
+  --orange: #ff6030;
+  --text: #e8e8f0;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+/* ── LOGIN SCREEN ─────────────────────────────────────────── */
+#login-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at 50% 0%, #1a1020 0%, #0a0a0f 70%);
+  gap: 0;
+}
+
+.login-ball {
+  width: 80px; height: 80px; border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--gold), var(--gold2), var(--gold));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 40px;
+  box-shadow: 0 0 40px rgba(240,192,64,0.5);
+  animation: pulse 2s ease-in-out infinite;
+  margin-bottom: 24px;
+}
+
+@keyframes pulse { 0%,100%{box-shadow:0 0 30px rgba(240,192,64,0.4)} 50%{box-shadow:0 0 60px rgba(240,192,64,0.7)} }
+
+.login-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 40px;
+  text-align: center;
+  max-width: 380px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+
+.login-box h1 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 32px;
+  letter-spacing: 4px;
+  color: var(--gold);
+  margin-bottom: 4px;
+}
+
+.login-box p {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 32px;
+}
+
+.login-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 24px 0;
+}
+
+.login-desc {
+  font-size: 13px;
+  color: #777;
+  line-height: 1.6;
+  margin-bottom: 28px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.btn-google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 20px;
+  background: white;
+  color: #333;
+  border: none;
+  border-radius: 10px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+}
+
+.btn-google:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.4); }
+
+.google-logo {
+  width: 20px; height: 20px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill='%23EA4335' d='M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z'/%3E%3Cpath fill='%234285F4' d='M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z'/%3E%3Cpath fill='%23FBBC05' d='M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z'/%3E%3Cpath fill='%2334A853' d='M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+
+/* ── APP ──────────────────────────────────────────────────── */
+#app { display: none; }
+
+/* HEADER */
+.header {
+  background: linear-gradient(135deg, #0a0a0f 0%, #1a0a20 40%, #0a1020 100%);
+  border-bottom: 2px solid var(--gold);
+  position: sticky; top: 0; z-index: 100;
+  box-shadow: 0 4px 40px rgba(240,192,64,0.15);
+}
+
+.header-inner {
+  max-width: 1400px; margin: 0 auto; padding: 10px 20px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+
+.logo-area { display: flex; align-items: center; gap: 10px; }
+
+.logo-ball {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--gold), var(--gold2), var(--gold));
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.logo-text h1 { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:3px; color:var(--gold); line-height:1; }
+.logo-text p  { font-family:'Barlow Condensed',sans-serif; font-size:9px; letter-spacing:3px; text-transform:uppercase; color:#666; }
+
+.progress-area { flex:1; min-width:160px; }
+.prog-nums { display:flex; justify-content:space-between; font-family:'Barlow Condensed',sans-serif; font-size:12px; color:#aaa; margin-bottom:4px; }
+.prog-nums strong { color:var(--gold); font-size:14px; }
+.prog-track { height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+.prog-fill { height:100%; background:linear-gradient(90deg, var(--gold2), var(--gold)); border-radius:3px; transition:width 0.4s; }
+
+.user-area { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+
+#user-photo {
+  width:32px; height:32px; border-radius:50%;
+  border:2px solid var(--gold);
+  object-fit:cover;
+}
+
+#user-name {
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:13px; color:#aaa; letter-spacing:1px;
+  max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+
+.btn {
+  font-family:'Barlow Condensed',sans-serif; font-size:12px; font-weight:600;
+  letter-spacing:2px; text-transform:uppercase; padding:7px 14px;
+  border:none; border-radius:4px; cursor:pointer; transition:all 0.2s; white-space:nowrap;
+}
+.btn-gold { background:linear-gradient(135deg,var(--gold2),var(--gold)); color:#0a0a0f; }
+.btn-gold:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(240,192,64,0.4); }
+.btn-outline { background:transparent; color:#aaa; border:1px solid var(--border); }
+.btn-outline:hover { border-color:#666; color:var(--text); }
+.btn-danger { background:transparent; color:var(--red); border:1px solid rgba(224,48,48,0.4); }
+.btn-danger:hover { background:var(--red); color:white; }
+
+/* TABS */
+.tabs {
+  max-width:1400px; margin:0 auto; padding:12px 20px 0;
+  display:flex; gap:4px; border-bottom:1px solid var(--border);
+}
+
+.tab {
+  font-family:'Barlow Condensed',sans-serif; font-size:13px; font-weight:600;
+  letter-spacing:2px; text-transform:uppercase; padding:10px 18px;
+  background:transparent; border:none; color:#666; cursor:pointer;
+  border-bottom:2px solid transparent; margin-bottom:-1px;
+  transition:all 0.2s;
+}
+
+.tab.active { color:var(--gold); border-bottom-color:var(--gold); }
+.tab:hover:not(.active) { color:#aaa; }
+
+/* CONTROLS */
+.controls {
+  max-width:1400px; margin:0 auto; padding:14px 20px;
+  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+}
+
+.search-wrap { position:relative; flex:1; min-width:180px; }
+.search-wrap input {
+  width:100%; background:var(--surface); border:1px solid var(--border);
+  border-radius:6px; padding:8px 12px 8px 34px; color:var(--text);
+  font-family:'Barlow',sans-serif; font-size:13px; outline:none;
+}
+.search-wrap input:focus { border-color:var(--gold); }
+.search-wrap input::placeholder { color:#444; }
+.search-icon { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:#444; font-size:13px; }
+
+.filter-btn {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
+  letter-spacing:1.5px; text-transform:uppercase; padding:7px 12px;
+  border:1px solid var(--border); border-radius:4px; background:transparent;
+  color:#666; cursor:pointer; transition:all 0.2s; white-space:nowrap;
+}
+.filter-btn.active { background:var(--gold); color:#0a0a0f; border-color:var(--gold); }
+.filter-btn:hover:not(.active) { color:#aaa; border-color:#555; }
+
+/* MAIN */
+.main { max-width:1400px; margin:0 auto; padding:0 20px 60px; }
+
+/* STATS BAR */
+.stats-bar {
+  background:var(--surface2); border:1px solid var(--border); border-radius:10px;
+  padding:16px 20px; margin-bottom:20px;
+  display:flex; gap:24px; flex-wrap:wrap; align-items:center;
+}
+
+.stat { text-align:center; }
+.stat-n { font-family:'Bebas Neue',sans-serif; font-size:30px; line-height:1; color:var(--gold); display:block; }
+.stat-n.green { color:var(--green); }
+.stat-n.red   { color:var(--red); }
+.stat-n.blue  { color:var(--blue); }
+.stat-n.orange { color:var(--orange); }
+.stat-l { font-family:'Barlow Condensed',sans-serif; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#555; }
+.stat-div { width:1px; background:var(--border); align-self:stretch; }
+
+/* GROUP HEADER */
+.group-hdr {
+  font-family:'Bebas Neue',sans-serif; font-size:20px; letter-spacing:4px; color:var(--gold);
+  margin:24px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+}
+.group-hdr span { font-family:'Barlow Condensed',sans-serif; color:#555; font-size:12px; letter-spacing:2px; }
+
+/* TEAMS GRID */
+.teams-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(290px,1fr)); gap:14px; }
+
+/* TEAM CARD */
+.team-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  overflow:hidden; transition:all 0.25s; position:relative;
+}
+.team-card:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,0.4); border-color:#3a3a50; }
+.team-card.complete { border-color:var(--green); box-shadow:0 0 12px rgba(48,192,96,0.1); }
+
+.card-header {
+  padding:12px 14px 10px; display:flex; align-items:center; gap:10px;
+  cursor:pointer; user-select:none;
+}
+
+.card-flag { font-size:26px; line-height:1; min-width:32px; text-align:center; }
+
+.card-info { flex:1; min-width:0; }
+.card-name { font-family:'Barlow Condensed',sans-serif; font-size:15px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--text); }
+.card-code { font-size:10px; color:var(--gold2); letter-spacing:2px; font-family:'Barlow Condensed',sans-serif; margin-top:1px; }
+
+.card-meta { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+
+.minibar-wrap { width:44px; height:4px; background:var(--border); border-radius:2px; }
+.minibar-fill { height:100%; background:linear-gradient(90deg,var(--gold2),var(--gold)); border-radius:2px; transition:width 0.3s; }
+.minibar-fill.full { background:var(--green); }
+
+.card-count { font-family:'Barlow Condensed',sans-serif; font-size:16px; font-weight:700; color:var(--gold); min-width:36px; text-align:right; }
+.card-count.full { color:var(--green); }
+.card-arrow { color:#444; font-size:14px; margin-left:2px; }
+
+.complete-badge {
+  position:absolute; top:8px; right:8px;
+  background:var(--green); color:#0a0a0f;
+  font-family:'Bebas Neue',sans-serif; font-size:9px; letter-spacing:1px;
+  padding:2px 6px; border-radius:3px; display:none;
+}
+
+/* STICKERS PANEL */
+.stickers-panel { padding:0 14px 14px; display:none; }
+.stickers-panel.open { display:block; }
+
+.legend {
+  display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;
+  font-family:'Barlow Condensed',sans-serif; font-size:9px; letter-spacing:1px; text-transform:uppercase; color:#555;
+}
+.leg { display:flex; align-items:center; gap:4px; }
+.leg-dot { width:8px; height:8px; border-radius:2px; }
+
+.stickers-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin-bottom:10px; }
+
+/* STICKER SLOT */
+.sticker {
+  border-radius:7px; border:1.5px solid var(--border);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  cursor:pointer; transition:all 0.15s; position:relative;
+  background:var(--surface2); padding:5px 3px; min-height:60px;
+  user-select:none;
+}
+.sticker:hover { border-color:var(--gold); transform:scale(1.06); z-index:2; }
+
+/* States */
+.sticker.got1 { background:linear-gradient(135deg,#0e1f0e,#091509); border-color:var(--green); }
+.sticker.got2 { background:linear-gradient(135deg,#102030,#081828); border-color:var(--blue); }
+.sticker.got3 { background:linear-gradient(135deg,#201008,#180a00); border-color:var(--orange); }
+.sticker.got4plus { background:linear-gradient(135deg,#200a20,#150015); border-color:#c060e0; }
+
+/* Types */
+.sticker.shield { background:linear-gradient(135deg,#1a1208,#0e0800); border-color:#5a4010; }
+.sticker.shield.got1 { border-color:var(--gold); background:linear-gradient(135deg,#2a2010,#1a1000); }
+.sticker.photo  { background:linear-gradient(135deg,#101828,#080f1a); border-color:#1a4070; }
+.sticker.photo.got1  { border-color:var(--blue); }
+
+.s-code { font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:#888; line-height:1; }
+.got1 .s-code { color:var(--green); }
+.got2 .s-code { color:var(--blue); }
+.got3 .s-code { color:var(--orange); }
+.got4plus .s-code { color:#c060e0; }
+.shield .s-code { color:var(--gold2); }
+.shield.got1 .s-code { color:var(--gold); }
+.photo .s-code { color:#5080c0; }
+
+.s-lbl { font-size:8px; color:#444; text-align:center; line-height:1.2; margin-top:2px; font-family:'Barlow Condensed',sans-serif; }
+.got1 .s-lbl { color:rgba(48,192,96,0.5); }
+.got2 .s-lbl { color:rgba(48,128,232,0.5); }
+
+/* COUNT BADGE on sticker */
+.s-count {
+  position:absolute; top:3px; right:3px;
+  background:var(--gold); color:#0a0a0f;
+  font-family:'Bebas Neue',sans-serif; font-size:10px;
+  width:16px; height:16px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  line-height:1;
+}
+.got2 .s-count { background:var(--blue); color:white; }
+.got3 .s-count { background:var(--orange); color:white; }
+.got4plus .s-count { background:#c060e0; color:white; }
+
+.sticker-actions {
+  display:flex; gap:3px; margin-top:4px; width:100%;
+}
+
+.s-btn {
+  flex:1; font-size:13px; background:rgba(255,255,255,0.05);
+  border:none; border-radius:4px; cursor:pointer; padding:3px 0;
+  color:#888; transition:all 0.15s; line-height:1;
+}
+.s-btn:hover { background:rgba(255,255,255,0.12); color:var(--text); }
+.s-btn.minus:hover { background:rgba(224,48,48,0.2); color:var(--red); }
+.s-btn.plus:hover  { background:rgba(48,192,96,0.2);  color:var(--green); }
+
+/* QUICK ACTIONS */
+.quick-actions { display:flex; gap:8px; padding-top:8px; border-top:1px solid var(--border); }
+.quick-actions button {
+  flex:1; font-family:'Barlow Condensed',sans-serif; font-size:10px; font-weight:600;
+  letter-spacing:1.5px; text-transform:uppercase; padding:6px;
+  border:1px solid var(--border); border-radius:4px; background:transparent; color:#666; cursor:pointer; transition:all 0.2s;
+}
+.quick-actions .q-got  { color:var(--green); border-color:rgba(48,192,96,0.3); }
+.quick-actions .q-got:hover  { background:var(--green); color:#0a0a0f; }
+.quick-actions .q-none { color:var(--red);   border-color:rgba(224,48,48,0.3); }
+.quick-actions .q-none:hover { background:var(--red); color:white; }
+
+/* ── TRADES TAB ──────────────────────────────────────────── */
+#tab-trades { display:none; }
+
+.trades-header {
+  background:var(--surface2); border:1px solid var(--border); border-radius:10px;
+  padding:16px 20px; margin-bottom:20px;
+}
+.trades-header h2 { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:3px; color:var(--gold); margin-bottom:4px; }
+.trades-header p  { font-size:13px; color:#666; line-height:1.5; }
+
+.refresh-btn {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
+  letter-spacing:2px; text-transform:uppercase; padding:7px 14px;
+  background:transparent; color:var(--gold); border:1px solid rgba(240,192,64,0.4);
+  border-radius:4px; cursor:pointer; transition:all 0.2s; margin-top:10px;
+}
+.refresh-btn:hover { background:rgba(240,192,64,0.1); }
+
+.user-trades-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  margin-bottom:16px; overflow:hidden;
+}
+
+.utc-header {
+  padding:14px 16px; display:flex; align-items:center; gap:12px;
+  cursor:pointer; user-select:none;
+  border-bottom:1px solid transparent;
+  transition:border-color 0.2s;
+}
+.utc-header.open { border-bottom-color:var(--border); }
+
+.utc-avatar {
+  width:36px; height:36px; border-radius:50%;
+  background:var(--surface2); border:2px solid var(--border);
+  display:flex; align-items:center; justify-content:center; font-size:16px;
+  overflow:hidden; flex-shrink:0;
+}
+.utc-avatar img { width:100%; height:100%; object-fit:cover; }
+
+.utc-info { flex:1; }
+.utc-name { font-family:'Barlow Condensed',sans-serif; font-size:15px; font-weight:700; letter-spacing:1px; color:var(--text); }
+.utc-summary { font-size:11px; color:#666; margin-top:2px; font-family:'Barlow Condensed',sans-serif; letter-spacing:1px; }
+
+.utc-badges { display:flex; gap:6px; flex-shrink:0; }
+.badge {
+  font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px;
+  padding:3px 8px; border-radius:4px;
+}
+.badge-give { background:rgba(48,192,96,0.15); color:var(--green); border:1px solid rgba(48,192,96,0.3); }
+.badge-want { background:rgba(48,128,232,0.15); color:var(--blue);  border:1px solid rgba(48,128,232,0.3); }
+
+.utc-body { padding:14px 16px; display:none; }
+.utc-body.open { display:block; }
+
+.trade-section-title {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700;
+  letter-spacing:2px; text-transform:uppercase; margin-bottom:8px;
+}
+.trade-section-title.give { color:var(--green); }
+.trade-section-title.want { color:var(--blue); }
+
+.trade-chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:14px; }
+
+.chip {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
+  letter-spacing:0.5px; padding:3px 8px; border-radius:4px; white-space:nowrap;
+}
+.chip-give { background:rgba(48,192,96,0.1); color:var(--green); border:1px solid rgba(48,192,96,0.3); }
+.chip-want { background:rgba(48,128,232,0.1); color:var(--blue);  border:1px solid rgba(48,128,232,0.3); }
+.chip-count { font-size:9px; opacity:0.7; }
+
+.no-trades { text-align:center; padding:40px 20px; color:#444; }
+.no-trades h3 { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:3px; color:#333; margin-bottom:6px; }
+
+/* ── TOAST ───────────────────────────────────────────────── */
+.toast {
+  position:fixed; bottom:20px; right:20px;
+  background:var(--surface2); border:1px solid var(--border); border-radius:8px;
+  padding:10px 16px; font-family:'Barlow Condensed',sans-serif; font-size:13px; letter-spacing:1px;
+  z-index:999; transform:translateY(60px); opacity:0; transition:all 0.3s; max-width:280px;
+}
+.toast.show { transform:translateY(0); opacity:1; }
+
+/* CONFETTI */
+.cp { position:fixed; animation:cf 3s linear forwards; z-index:9999; pointer-events:none; border-radius:2px; }
+@keyframes cf { 0%{transform:translateY(-10px) rotate(0deg);opacity:1} 100%{transform:translateY(100vh) rotate(720deg);opacity:0} }
+
+/* NO RESULTS */
+.no-res { text-align:center; padding:50px 20px; color:#444; }
+.no-res h3 { font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:3px; color:#333; }
+
+/* RESPONSIVE */
+@media(max-width:600px){
+  .header-inner { padding:8px 12px; gap:10px; }
+  .logo-text h1 { font-size:18px; }
+  .controls { padding:10px 12px; }
+  .main { padding:0 12px 60px; }
+  .teams-grid { grid-template-columns:1fr; }
+  .stickers-grid { grid-template-columns:repeat(5,1fr); }
+  .stats-bar { gap:14px; padding:12px; }
+  .stat-n { font-size:24px; }
+  #user-name { display:none; }
+}
+
+::-webkit-scrollbar { width:5px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+
+/* ── MODAL PERFIL ─────────────────────────────────────────── */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.75);
+  z-index:500; display:flex; align-items:center; justify-content:center;
+  padding:20px; backdrop-filter:blur(4px);
+  opacity:0; pointer-events:none; transition:opacity 0.25s;
+}
+.modal-overlay.open { opacity:1; pointer-events:all; }
+
+.modal {
+  background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  padding:28px; max-width:420px; width:100%;
+  transform:translateY(20px); transition:transform 0.25s;
+  box-shadow:0 20px 60px rgba(0,0,0,0.6);
+}
+.modal-overlay.open .modal { transform:translateY(0); }
+
+.modal h2 {
+  font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:3px;
+  color:var(--gold); margin-bottom:4px;
+}
+.modal p.modal-sub { font-size:12px; color:#555; margin-bottom:24px; letter-spacing:0.5px; }
+
+.form-group { margin-bottom:16px; }
+.form-group label {
+  display:block; font-family:'Barlow Condensed',sans-serif; font-size:11px;
+  letter-spacing:2px; text-transform:uppercase; color:#777; margin-bottom:6px;
+}
+.form-group input {
+  width:100%; background:var(--surface2); border:1px solid var(--border);
+  border-radius:8px; padding:10px 14px; color:var(--text);
+  font-family:'Barlow',sans-serif; font-size:14px; outline:none;
+  transition:border-color 0.2s;
+}
+.form-group input:focus { border-color:var(--gold); }
+.form-group input::placeholder { color:#444; }
+
+.modal-actions { display:flex; gap:10px; margin-top:20px; }
+.modal-actions button { flex:1; }
+
+/* Profile pill in header */
+.profile-btn {
+  display:flex; align-items:center; gap:8px;
+  background:transparent; border:1px solid var(--border);
+  border-radius:20px; padding:4px 12px 4px 4px;
+  cursor:pointer; transition:border-color 0.2s;
+}
+.profile-btn:hover { border-color:var(--gold); }
+
+/* Contact info in trade card */
+.utc-contact {
+  display:flex; align-items:center; gap:8px; margin-top:12px;
+  padding:10px 12px; background:var(--surface2); border-radius:8px;
+  border:1px solid var(--border);
+}
+.utc-contact-icon { font-size:18px; }
+.utc-contact-info { flex:1; }
+.utc-contact-name { font-family:'Barlow Condensed',sans-serif; font-size:14px; font-weight:700; color:var(--text); }
+.utc-contact-phone { font-size:12px; color:#666; margin-top:1px; }
+.utc-contact-wa {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
+  letter-spacing:1px; padding:6px 12px; border-radius:6px;
+  background:rgba(37,211,102,0.15); color:#25D366; border:1px solid rgba(37,211,102,0.3);
+  text-decoration:none; white-space:nowrap; transition:all 0.2s;
+}
+.utc-contact-wa:hover { background:rgba(37,211,102,0.25); }
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN SCREEN ══════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-ball">⚽</div>
+  <div class="login-box">
+    <h1>Álbum Panini</h1>
+    <p>FIFA World Cup 2026™</p>
+    <p class="login-desc">Tu álbum personal en la nube. Marca tus estampas, registra repetidas y encuentra intercambios con tus amigos.</p>
+    <hr class="login-divider">
+    <button class="btn-google" onclick="loginGoogle()">
+      <div class="google-logo"></div>
+      Entrar con Google
+    </button>
+  </div>
+</div>
+
+<!-- ══ APP ═══════════════════════════════════════════════════ -->
+<div id="app">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-inner">
+      <div class="logo-area">
+        <div class="logo-ball">⚽</div>
+        <div class="logo-text">
+          <h1>Panini 2026</h1>
+          <p>World Cup · 980 estampas</p>
+        </div>
+      </div>
+      <div class="progress-area">
+        <div class="prog-nums">
+          <span>Conseguidas: <strong id="hdr-got">0</strong>/980</span>
+          <span id="hdr-pct">0%</span>
+        </div>
+        <div class="prog-track"><div class="prog-fill" id="hdr-bar" style="width:0%"></div></div>
+      </div>
+      <div class="user-area">
+        <button class="profile-btn" onclick="openProfile()">
+          <img id="user-photo" src="" alt="" style="display:none;width:28px;height:28px;border-radius:50%;object-fit:cover;">
+          <span id="user-name" style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#aaa;letter-spacing:1px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+          <span style="color:#555;font-size:11px">✏️</span>
+        </button>
+        <button class="btn btn-gold" onclick="exportPDF()">📄 PDF</button>
+        <button class="btn btn-outline" onclick="logoutUser()">Salir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('album', this)">📖 Mi Álbum</button>
+    <button class="tab" onclick="switchTab('trades', this)">🔄 Intercambios</button>
+  </div>
+
+  <!-- ── TAB: ÁLBUM ─────────────────────────────────────────── -->
+  <div id="tab-album">
+    <div class="controls">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="search" placeholder="Buscar equipo o código (MEX 5)..." oninput="renderAll()">
+      </div>
+      <button class="filter-btn active" onclick="setFilter('all',this)">Todos</button>
+      <button class="filter-btn" onclick="setFilter('missing',this)">Faltantes</button>
+      <button class="filter-btn" onclick="setFilter('dups',this)">Repetidas</button>
+      <button class="filter-btn" onclick="setFilter('complete',this)">Completos</button>
+    </div>
+
+    <div class="main">
+      <div class="stats-bar">
+        <div class="stat"><span class="stat-n green" id="s-got">0</span><span class="stat-l">Conseguidas</span></div>
+        <div class="stat-div"></div>
+        <div class="stat"><span class="stat-n red"   id="s-miss">980</span><span class="stat-l">Faltantes</span></div>
+        <div class="stat-div"></div>
+        <div class="stat"><span class="stat-n orange" id="s-dups">0</span><span class="stat-l">Repetidas</span></div>
+        <div class="stat-div"></div>
+        <div class="stat"><span class="stat-n blue"  id="s-teams">0/49</span><span class="stat-l">Completos</span></div>
+        <div class="stat-div"></div>
+        <div class="stat"><span class="stat-n"       id="s-pct">0%</span><span class="stat-l">Progreso</span></div>
+      </div>
+
+      <div id="content"></div>
+    </div>
+  </div>
+
+  <!-- ── TAB: INTERCAMBIOS ──────────────────────────────────── -->
+  <div id="tab-trades" class="main" style="padding-top:16px;">
+    <div class="trades-header">
+      <h2>🔄 Intercambios</h2>
+      <p>Aquí ves quién tiene repetidas que a ti te faltan, y quién necesita lo que a ti te sobra. ¡Coordina tus intercambios!</p>
+      <button class="refresh-btn" onclick="loadAllUsersData().then(renderTrades)">↻ Actualizar</button>
+    </div>
+    <div id="trades-content"><p style="color:#555;text-align:center;padding:40px">Cargando usuarios...</p></div>
+  </div>
+
+
+<!-- ══ MODAL PERFIL ══════════════════════════════════════════ -->
+<div class="modal-overlay" id="profile-modal">
+  <div class="modal">
+    <h2>Mi Perfil</h2>
+    <p class="modal-sub">Tus datos de contacto son visibles para los demás al buscar intercambios</p>
+    <div class="form-group">
+      <label>Nombre para mostrar</label>
+      <input type="text" id="profile-name" placeholder="Ej: Carlos G." maxlength="40">
+    </div>
+    <div class="form-group">
+      <label>WhatsApp / Teléfono</label>
+      <input type="tel" id="profile-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
+    </div>
+    <div class="form-group">
+      <label>Ciudad (opcional)</label>
+      <input type="text" id="profile-city" placeholder="Ej: León, Guanajuato" maxlength="40">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeProfile()">Cancelar</button>
+      <button class="btn btn-gold" onclick="saveProfile()">💾 Guardar</button>
+    </div>
+  </div>
+</div>
+</div><!-- /app -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// DATOS — Grupos y equipos reales del Mundial 2026
+// ═══════════════════════════════════════════════════════════════
+function makeTeamStickers(code) {
+  const s = [];
+  for (let i = 1; i <= 20; i++) {
+    let lbl, type;
+    if      (i === 1)  { lbl = 'Escudo';      type = 'shield'; }
+    else if (i === 13) { lbl = 'Foto Grupal';  type = 'photo';  }
+    else               { lbl = `J${i < 13 ? i-1 : i-2}`; type = 'player'; }
+    s.push({ code: `${code} ${i}`, num: i, lbl, type });
+  }
+  return s;
+}
+
+function makeIntroStickers() {
+  const labels = [
+    'Portada','Presentación','Historia Copa','FIFA Trophy',
+    'Sede USA','Sede México','Sede Canadá',
+    'Estadio 1','Estadio 2','Estadio 3','Estadio 4',
+    'Estadio 5','Estadio 6','Estadio 7','Estadio 8',
+    'Estadio 9','Estadio 10','Leyendas','Leyendas 2','Road to 2026'
+  ];
+  return labels.map((lbl, i) => ({ code: `FWC ${i+1}`, num: i+1, lbl, type: 'intro' }));
+}
+
+const SECTIONS = [
+  { id:'FWC', name:'Introducción / World Cup', code:'FWC', flag:'🏆', group:'Introducción',  stickers: makeIntroStickers() },
+  { id:'MEX', name:'México',          code:'MEX', flag:'🇲🇽', group:'Grupo A', stickers: makeTeamStickers('MEX') },
+  { id:'RSA', name:'Sudáfrica',       code:'RSA', flag:'🇿🇦', group:'Grupo A', stickers: makeTeamStickers('RSA') },
+  { id:'KOR', name:'Corea del Sur',   code:'KOR', flag:'🇰🇷', group:'Grupo A', stickers: makeTeamStickers('KOR') },
+  { id:'CZE', name:'Chequia',         code:'CZE', flag:'🇨🇿', group:'Grupo A', stickers: makeTeamStickers('CZE') },
+  { id:'CAN', name:'Canadá',                code:'CAN', flag:'🇨🇦', group:'Grupo B', stickers: makeTeamStickers('CAN') },
+  { id:'BIH', name:'Bosnia y Herzegovina',  code:'BIH', flag:'🇧🇦', group:'Grupo B', stickers: makeTeamStickers('BIH') },
+  { id:'QAT', name:'Qatar',                 code:'QAT', flag:'🇶🇦', group:'Grupo B', stickers: makeTeamStickers('QAT') },
+  { id:'SUI', name:'Suiza',                 code:'SUI', flag:'🇨🇭', group:'Grupo B', stickers: makeTeamStickers('SUI') },
+  { id:'BRA', name:'Brasil',    code:'BRA', flag:'🇧🇷', group:'Grupo C', stickers: makeTeamStickers('BRA') },
+  { id:'MAR', name:'Marruecos', code:'MAR', flag:'🇲🇦', group:'Grupo C', stickers: makeTeamStickers('MAR') },
+  { id:'HAI', name:'Haití',     code:'HAI', flag:'🇭🇹', group:'Grupo C', stickers: makeTeamStickers('HAI') },
+  { id:'SCO', name:'Escocia',   code:'SCO', flag:'🏴󠁧󠁢󠁳󠁣󠁴󠁿', group:'Grupo C', stickers: makeTeamStickers('SCO') },
+  { id:'USA', name:'Estados Unidos', code:'USA', flag:'🇺🇸', group:'Grupo D', stickers: makeTeamStickers('USA') },
+  { id:'PAR', name:'Paraguay',       code:'PAR', flag:'🇵🇾', group:'Grupo D', stickers: makeTeamStickers('PAR') },
+  { id:'AUS', name:'Australia',      code:'AUS', flag:'🇦🇺', group:'Grupo D', stickers: makeTeamStickers('AUS') },
+  { id:'TUR', name:'Turquía',        code:'TUR', flag:'🇹🇷', group:'Grupo D', stickers: makeTeamStickers('TUR') },
+  { id:'GER', name:'Alemania',        code:'GER', flag:'🇩🇪', group:'Grupo E', stickers: makeTeamStickers('GER') },
+  { id:'CUW', name:'Curazao',         code:'CUW', flag:'🇨🇼', group:'Grupo E', stickers: makeTeamStickers('CUW') },
+  { id:'CIV', name:'Costa de Marfil', code:'CIV', flag:'🇨🇮', group:'Grupo E', stickers: makeTeamStickers('CIV') },
+  { id:'ECU', name:'Ecuador',         code:'ECU', flag:'🇪🇨', group:'Grupo E', stickers: makeTeamStickers('ECU') },
+  { id:'NED', name:'Países Bajos', code:'NED', flag:'🇳🇱', group:'Grupo F', stickers: makeTeamStickers('NED') },
+  { id:'JPN', name:'Japón',        code:'JPN', flag:'🇯🇵', group:'Grupo F', stickers: makeTeamStickers('JPN') },
+  { id:'SWE', name:'Suecia',       code:'SWE', flag:'🇸🇪', group:'Grupo F', stickers: makeTeamStickers('SWE') },
+  { id:'TUN', name:'Túnez',        code:'TUN', flag:'🇹🇳', group:'Grupo F', stickers: makeTeamStickers('TUN') },
+  { id:'BEL', name:'Bélgica',      code:'BEL', flag:'🇧🇪', group:'Grupo G', stickers: makeTeamStickers('BEL') },
+  { id:'EGY', name:'Egipto',       code:'EGY', flag:'🇪🇬', group:'Grupo G', stickers: makeTeamStickers('EGY') },
+  { id:'IRN', name:'Irán',         code:'IRN', flag:'🇮🇷', group:'Grupo G', stickers: makeTeamStickers('IRN') },
+  { id:'NZL', name:'Nueva Zelanda',code:'NZL', flag:'🇳🇿', group:'Grupo G', stickers: makeTeamStickers('NZL') },
+  { id:'ESP', name:'España',         code:'ESP', flag:'🇪🇸', group:'Grupo H', stickers: makeTeamStickers('ESP') },
+  { id:'CPV', name:'Cabo Verde',     code:'CPV', flag:'🇨🇻', group:'Grupo H', stickers: makeTeamStickers('CPV') },
+  { id:'KSA', name:'Arabia Saudita', code:'KSA', flag:'🇸🇦', group:'Grupo H', stickers: makeTeamStickers('KSA') },
+  { id:'URU', name:'Uruguay',        code:'URU', flag:'🇺🇾', group:'Grupo H', stickers: makeTeamStickers('URU') },
+  { id:'FRA', name:'Francia', code:'FRA', flag:'🇫🇷', group:'Grupo I', stickers: makeTeamStickers('FRA') },
+  { id:'SEN', name:'Senegal', code:'SEN', flag:'🇸🇳', group:'Grupo I', stickers: makeTeamStickers('SEN') },
+  { id:'IRQ', name:'Irak',    code:'IRQ', flag:'🇮🇶', group:'Grupo I', stickers: makeTeamStickers('IRQ') },
+  { id:'NOR', name:'Noruega', code:'NOR', flag:'🇳🇴', group:'Grupo I', stickers: makeTeamStickers('NOR') },
+  { id:'ARG', name:'Argentina', code:'ARG', flag:'🇦🇷', group:'Grupo J', stickers: makeTeamStickers('ARG') },
+  { id:'ALG', name:'Argelia',   code:'ALG', flag:'🇩🇿', group:'Grupo J', stickers: makeTeamStickers('ALG') },
+  { id:'AUT', name:'Austria',   code:'AUT', flag:'🇦🇹', group:'Grupo J', stickers: makeTeamStickers('AUT') },
+  { id:'JOR', name:'Jordania',  code:'JOR', flag:'🇯🇴', group:'Grupo J', stickers: makeTeamStickers('JOR') },
+  { id:'POR', name:'Portugal',   code:'POR', flag:'🇵🇹', group:'Grupo K', stickers: makeTeamStickers('POR') },
+  { id:'COD', name:'RD Congo',   code:'COD', flag:'🇨🇩', group:'Grupo K', stickers: makeTeamStickers('COD') },
+  { id:'UZB', name:'Uzbekistán', code:'UZB', flag:'🇺🇿', group:'Grupo K', stickers: makeTeamStickers('UZB') },
+  { id:'COL', name:'Colombia',   code:'COL', flag:'🇨🇴', group:'Grupo K', stickers: makeTeamStickers('COL') },
+  { id:'ENG', name:'Inglaterra', code:'ENG', flag:'🏴󠁧󠁢󠁥󠁮󠁧󠁿', group:'Grupo L', stickers: makeTeamStickers('ENG') },
+  { id:'CRO', name:'Croacia',    code:'CRO', flag:'🇭🇷', group:'Grupo L', stickers: makeTeamStickers('CRO') },
+  { id:'GHA', name:'Ghana',      code:'GHA', flag:'🇬🇭', group:'Grupo L', stickers: makeTeamStickers('GHA') },
+  { id:'PAN', name:'Panamá',     code:'PAN', flag:'🇵🇦', group:'Grupo L', stickers: makeTeamStickers('PAN') },
+];
+
+const TOTAL = SECTIONS.reduce((s, sec) => s + sec.stickers.length, 0);
+// All sticker codes for quick lookup
+const ALL_CODES = new Set(SECTIONS.flatMap(s => s.stickers.map(st => st.code)));
+
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// collected = { "MEX 1": 2, "MEX 2": 0, "BRA 5": 1, ... }
+// value = number of copies owned (0 = missing, 1 = have it, 2+ = duplicates)
+// ═══════════════════════════════════════════════════════════════
+window.collected   = {};   // populated by Firebase listener
+window.allUsersData = {};  // other users' data
+
+let currentFilter  = 'all';
+let openSections   = new Set();
+let saveTimer      = null;
+
+function getCount(key) { return window.collected[key] || 0; }
+
+function persist() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    window._saveToCloud(window.collected).catch(e => console.error(e));
+  }, 800); // debounce 800ms to avoid hammering Firestore
+}
+
+// +1 to a sticker
+function addSticker(key) {
+  window.collected[key] = (window.collected[key] || 0) + 1;
+  refreshSlot(key);
+  refreshCardCounters(key.split(' ')[0]);
+  updateStats();
+  persist();
+}
+
+// -1 to a sticker (min 0)
+function removeSticker(key) {
+  const cur = window.collected[key] || 0;
+  if (cur <= 0) return;
+  window.collected[key] = cur - 1;
+  refreshSlot(key);
+  refreshCardCounters(key.split(' ')[0]);
+  updateStats();
+  persist();
+}
+
+function markAllSection(code, value) {
+  const sec = SECTIONS.find(s => s.code === code);
+  if (!sec) return;
+  sec.stickers.forEach(s => { window.collected[s.code] = value; });
+  refreshCardCounters(code);
+  const panel = document.querySelector(`.stickers-panel[data-panel="${code}"]`);
+  if (panel && panel.classList.contains('open')) {
+    panel.querySelectorAll('.sticker').forEach(el => {
+      const k = el.dataset.key;
+      applySlotClass(el, getCount(k), getStickerType(k));
+      const countBadge = el.querySelector('.s-count');
+      const n = getCount(k);
+      if (countBadge) { countBadge.textContent = n; countBadge.style.display = n > 1 ? 'flex' : 'none'; }
+    });
+  }
+  updateStats();
+  persist();
+}
+
+function getStickerType(key) {
+  for (const sec of SECTIONS) {
+    const st = sec.stickers.find(s => s.code === key);
+    if (st) return st.type;
+  }
+  return 'player';
+}
+
+function refreshSlot(key) {
+  const el = document.querySelector(`.sticker[data-key="${key}"]`);
+  if (!el) return;
+  const n = getCount(key);
+  const type = getStickerType(key);
+  applySlotClass(el, n, type);
+  const badge = el.querySelector('.s-count');
+  if (badge) { badge.textContent = n; badge.style.display = n > 1 ? 'flex' : 'none'; }
+}
+
+function applySlotClass(el, n, type) {
+  el.classList.remove('got1','got2','got3','got4plus');
+  if (n === 1) el.classList.add('got1');
+  else if (n === 2) el.classList.add('got2');
+  else if (n === 3) el.classList.add('got3');
+  else if (n >= 4)  el.classList.add('got4plus');
+  // Keep type classes
+  el.classList.remove('shield','photo');
+  if (type === 'shield') el.classList.add('shield');
+  if (type === 'photo')  el.classList.add('photo');
+}
+
+function refreshCardCounters(code) {
+  const sec = SECTIONS.find(s => s.code === code);
+  if (!sec) return;
+  const got  = sec.stickers.filter(s => getCount(s.code) >= 1).length;
+  const total = sec.stickers.length;
+  const complete = got === total;
+  const card = document.querySelector(`.team-card[data-sid="${code}"]`);
+  if (!card) return;
+  const cnt   = card.querySelector('.card-count');
+  const fill  = card.querySelector('.minibar-fill');
+  const badge = card.querySelector('.complete-badge');
+  if (cnt)   { cnt.textContent = `${got}/${total}`; cnt.classList.toggle('full', complete); }
+  if (fill)  { fill.style.width = (got/total*100)+'%'; fill.classList.toggle('full', complete); }
+  if (badge) { badge.style.display = complete ? 'block' : 'none'; }
+  card.classList.toggle('complete', complete);
+  if (complete) celebrate();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STATS
+// ═══════════════════════════════════════════════════════════════
+function getStats() {
+  let got=0, dups=0;
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      const n = getCount(st.code);
+      if (n >= 1) got++;
+      if (n > 1)  dups += (n - 1);
+    }
+  }
+  const missing  = TOTAL - got;
+  const pct      = TOTAL > 0 ? Math.round(got / TOTAL * 100) : 0;
+  const complete = SECTIONS.filter(s => s.stickers.every(st => getCount(st.code) >= 1)).length;
+  return { got, missing, dups, pct, complete };
+}
+
+function updateStats() {
+  const { got, missing, dups, pct, complete } = getStats();
+  document.getElementById('s-got').textContent   = got;
+  document.getElementById('s-miss').textContent  = missing;
+  document.getElementById('s-dups').textContent  = dups;
+  document.getElementById('s-pct').textContent   = pct + '%';
+  document.getElementById('s-teams').textContent = complete + '/' + SECTIONS.length;
+  document.getElementById('hdr-got').textContent = got;
+  document.getElementById('hdr-pct').textContent = pct + '%';
+  document.getElementById('hdr-bar').style.width = pct + '%';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER ALBUM
+// ═══════════════════════════════════════════════════════════════
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderAll();
+}
+
+function renderAll() {
+  const q = document.getElementById('search')?.value.toLowerCase().trim() || '';
+  const content = document.getElementById('content');
+  if (!content) return;
+
+  const groups = {};
+  for (const sec of SECTIONS) {
+    const matchName = sec.name.toLowerCase().includes(q) || sec.code.toLowerCase().includes(q);
+    const matchCode = q && sec.stickers.some(s => s.code.toLowerCase().includes(q));
+    if (q && !matchName && !matchCode) continue;
+
+    const isComplete = sec.stickers.every(s => getCount(s.code) >= 1);
+    const hasDups    = sec.stickers.some(s => getCount(s.code) > 1);
+
+    if (currentFilter === 'missing'  && isComplete) continue;
+    if (currentFilter === 'complete' && !isComplete) continue;
+    if (currentFilter === 'dups'     && !hasDups) continue;
+
+    if (!groups[sec.group]) groups[sec.group] = [];
+    groups[sec.group].push(sec);
+  }
+
+  if (Object.keys(groups).length === 0) {
+    content.innerHTML = `<div class="no-res"><h3>Sin resultados</h3></div>`;
+    return;
+  }
+
+  let html = '';
+  for (const [grp, secs] of Object.entries(groups)) {
+    const gGot   = secs.reduce((s,sec) => s + sec.stickers.filter(st => getCount(st.code) >= 1).length, 0);
+    const gTotal = secs.reduce((s,sec) => s + sec.stickers.length, 0);
+    html += `<div class="group-hdr">${grp} <span>${gGot}/${gTotal}</span></div><div class="teams-grid">`;
+    for (const sec of secs) html += renderCard(sec, q);
+    html += '</div>';
+  }
+  content.innerHTML = html;
+  updateStats();
+}
+
+function renderCard(sec, q) {
+  const got      = sec.stickers.filter(s => getCount(s.code) >= 1).length;
+  const total    = sec.stickers.length;
+  const complete = got === total;
+  const pct      = total > 0 ? got / total * 100 : 0;
+  const isOpen   = openSections.has(sec.code);
+  const dups     = sec.stickers.reduce((s, st) => s + Math.max(0, getCount(st.code)-1), 0);
+
+  let stickersHtml = '';
+  for (const s of sec.stickers) {
+    const n = getCount(s.code);
+    const typeCls = s.type === 'shield' ? ' shield' : s.type === 'photo' ? ' photo' : '';
+    const gotCls  = n === 1 ? ' got1' : n === 2 ? ' got2' : n === 3 ? ' got3' : n >= 4 ? ' got4plus' : '';
+    const highlighted = q && s.code.toLowerCase().includes(q);
+    stickersHtml += `
+      <div class="sticker${typeCls}${gotCls}${highlighted?' hl':''}" data-key="${s.code}" title="${s.code} · ${s.lbl}">
+        <span class="s-code">${s.code}</span>
+        <span class="s-lbl">${s.type==='shield'?'🛡 Escudo':s.type==='photo'?'📸 Grupal':s.lbl}</span>
+        ${n > 1 ? `<div class="s-count">${n}</div>` : ''}
+        <div class="sticker-actions">
+          <button class="s-btn minus" onclick="removeSticker('${s.code}');event.stopPropagation()">−</button>
+          <button class="s-btn plus"  onclick="addSticker('${s.code}');event.stopPropagation()">+</button>
+        </div>
+      </div>`;
+  }
+
+  return `
+  <div class="team-card${complete?' complete':''}" data-sid="${sec.code}">
+    ${complete ? '<div class="complete-badge">✅ COMPLETO</div>' : ''}
+    <div class="card-header" onclick="togglePanel('${sec.code}')">
+      <span class="card-flag">${sec.flag}</span>
+      <div class="card-info">
+        <div class="card-name">${sec.name}</div>
+        <div class="card-code">${sec.code} 1 – ${sec.code} ${total}${dups > 0 ? ` · <span style="color:var(--orange)">${dups} repetidas</span>` : ''}</div>
+      </div>
+      <div class="card-meta">
+        <div class="minibar-wrap"><div class="minibar-fill${complete?' full':''}" style="width:${pct}%"></div></div>
+        <span class="card-count${complete?' full':''}">${got}/${total}</span>
+        <span class="card-arrow">${isOpen?'▲':'▼'}</span>
+      </div>
+    </div>
+    <div class="stickers-panel${isOpen?' open':''}" data-panel="${sec.code}">
+      <div class="legend">
+        <div class="leg"><div class="leg-dot" style="background:var(--green)"></div>Tengo (1)</div>
+        <div class="leg"><div class="leg-dot" style="background:var(--blue)"></div>×2</div>
+        <div class="leg"><div class="leg-dot" style="background:var(--orange)"></div>×3</div>
+        <div class="leg"><div class="leg-dot" style="background:#c060e0"></div>×4+</div>
+      </div>
+      <div class="stickers-grid">${stickersHtml}</div>
+      <div class="quick-actions">
+        <button class="q-got"  onclick="markAllSection('${sec.code}', 1)">✅ Marcar todas ×1</button>
+        <button class="q-none" onclick="markAllSection('${sec.code}', 0)">❌ Desmarcar todas</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function togglePanel(code) {
+  if (openSections.has(code)) openSections.delete(code);
+  else openSections.add(code);
+  const panel = document.querySelector(`.stickers-panel[data-panel="${code}"]`);
+  const card  = document.querySelector(`.team-card[data-sid="${code}"]`);
+  if (panel) panel.classList.toggle('open', openSections.has(code));
+  const arrow = card?.querySelector('.card-arrow');
+  if (arrow) arrow.textContent = openSections.has(code) ? '▲' : '▼';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER TRADES
+// ═══════════════════════════════════════════════════════════════
+window.renderTrades = function() {
+  const container = document.getElementById('trades-content');
+  if (!container) return;
+
+  const users = window.allUsersData || {};
+  const uids  = Object.keys(users);
+
+  if (uids.length === 0) {
+    container.innerHTML = `<div class="no-trades"><h3>Nadie más todavía</h3><p style="color:#555;font-size:13px">Comparte el link con tus amigos para ver los intercambios posibles</p></div>`;
+    return;
+  }
+
+  // My missing & my duplicates
+  const myMissing = new Set();
+  const myDups    = {};
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      const n = getCount(st.code);
+      if (n === 0) myMissing.add(st.code);
+      if (n > 1)   myDups[st.code] = n - 1; // extras I have
+    }
+  }
+
+  let html = '';
+
+  for (const uid of uids) {
+    const udata     = users[uid];
+    const uStickers = udata.stickers || {};
+    const uName     = udata.displayName || udata.email || 'Usuario';
+    const uPhoto    = udata.photoURL || null;
+
+    // What they have duplicated that I need
+    const theyCanGive = [];
+    // What they're missing that I have extra
+    const theyNeed    = [];
+
+    for (const code of ALL_CODES) {
+      const theirCount = uStickers[code] || 0;
+      const myCount    = getCount(code);
+
+      // They have extras of something I'm missing
+      if (theirCount > 1 && myMissing.has(code)) {
+        theyCanGive.push({ code, extras: theirCount - 1 });
+      }
+      // I have extras of something they're missing
+      if (myCount > 1 && theirCount === 0) {
+        theyNeed.push({ code, extras: myCount - 1 });
+      }
+    }
+
+    if (theyCanGive.length === 0 && theyNeed.length === 0) continue;
+
+    const openId = `utc-${uid.slice(0,8)}`;
+    html += `
+    <div class="user-trades-card">
+      <div class="utc-header" onclick="toggleUtc('${openId}')">
+        <div class="utc-avatar">
+          ${uPhoto ? `<img src="${uPhoto}" alt="">` : '👤'}
+        </div>
+        <div class="utc-info">
+          <div class="utc-name">${uName}</div>
+          <div class="utc-summary">
+            ${theyCanGive.length > 0 ? `Te puede dar ${theyCanGive.length} estampas` : ''}
+            ${theyCanGive.length > 0 && theyNeed.length > 0 ? ' · ' : ''}
+            ${theyNeed.length > 0 ? `Tú le puedes dar ${theyNeed.length}` : ''}
+          </div>
+        </div>
+        <div class="utc-badges">
+          ${theyCanGive.length > 0 ? `<div class="badge badge-give">+${theyCanGive.length}</div>` : ''}
+          ${theyNeed.length    > 0 ? `<div class="badge badge-want">↔${theyNeed.length}</div>`    : ''}
+        </div>
+      </div>
+      <div class="utc-body" id="${openId}">`;
+
+    if (theyCanGive.length > 0) {
+      html += `<div class="trade-section-title give">✅ Ellos tienen repetidas que a ti te faltan (${theyCanGive.length})</div><div class="trade-chips">`;
+      for (const { code, extras } of theyCanGive) {
+        html += `<div class="chip chip-give">${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
+      }
+      html += `</div>`;
+    }
+
+    if (theyNeed.length > 0) {
+      html += `<div class="trade-section-title want">🔵 Tú tienes repetidas que a ellos les faltan (${theyNeed.length})</div><div class="trade-chips">`;
+      for (const { code, extras } of theyNeed) {
+        html += `<div class="chip chip-want">${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // Contact info block
+    const uProfile = udata.profile || {};
+    const contactName  = uProfile.nickname || uName;
+    const contactPhone = uProfile.phone || '';
+    const contactCity  = uProfile.city  || '';
+    const waLink = contactPhone
+      ? `https://wa.me/${contactPhone.replace(/[^0-9]/g,'')}`
+      : '';
+
+    html += `<div class="utc-contact">
+      <div class="utc-contact-icon">📱</div>
+      <div class="utc-contact-info">
+        <div class="utc-contact-name">${contactName}${contactCity ? ` · ${contactCity}` : ''}</div>
+        <div class="utc-contact-phone">${contactPhone || '<span style="color:#444;font-style:italic">Sin teléfono registrado</span>'}</div>
+      </div>
+      ${waLink ? `<a class="utc-contact-wa" href="${waLink}" target="_blank">WhatsApp 💬</a>` : ''}
+    </div>`;
+    html += `</div></div>`;
+  }
+
+  if (!html) {
+    html = `<div class="no-trades"><h3>Sin intercambios posibles</h3><p style="color:#555;font-size:13px">Ningún amigo tiene repetidas que te falten, o viceversa. ¡Sigan abriendo sobres!</p></div>`;
+  }
+
+  container.innerHTML = html;
+};
+
+function toggleUtc(id) {
+  const body   = document.getElementById(id);
+  const header = body?.previousElementSibling;
+  if (!body) return;
+  const isOpen = body.classList.toggle('open');
+  if (header) header.classList.toggle('open', isOpen);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════════════
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-album').style.display  = tab === 'album'  ? 'block' : 'none';
+  document.getElementById('tab-trades').style.display = tab === 'trades' ? 'block' : 'none';
+  if (tab === 'trades') {
+    window.loadAllUsersData().then(window.renderTrades);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PDF EXPORT
+// ═══════════════════════════════════════════════════════════════
+function exportPDF() {
+  showToast('📄 Generando PDF...');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  const W=210, H=297, m=14;
+  let y = m;
+
+  const newPage = () => { doc.addPage(); y = m; drawBg(); };
+  const chk = (n) => { if (y + n > H - 12) newPage(); };
+  const drawBg = () => { doc.setFillColor(10,10,15); doc.rect(0,0,W,H,'F'); };
+  drawBg();
+
+  // Header
+  doc.setFillColor(25,15,5); doc.rect(0,0,W,28,'F');
+  doc.setFillColor(240,192,64); doc.rect(0,27,W,1.5,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(240,192,64);
+  doc.text('PANINI FIFA WORLD CUP 2026 — ESTAMPAS FALTANTES', m, 12);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(150,150,150);
+  const { got, missing } = getStats();
+  doc.text(`${got}/980 conseguidas · ${missing} faltantes · ${new Date().toLocaleDateString('es-MX')}`, m, 22);
+  y = 34;
+
+  if (missing === 0) {
+    doc.setFontSize(20); doc.setFont('helvetica','bold'); doc.setTextColor(48,192,96);
+    doc.text('¡ALBUM COMPLETADO!', W/2, H/2, {align:'center'});
+    doc.save('panini-2026-faltantes.pdf'); showToast('✅ PDF listo'); return;
+  }
+
+  let curGroup = '';
+  for (const sec of SECTIONS) {
+    const miss = sec.stickers.filter(s => getCount(s.code) === 0);
+    if (miss.length === 0) continue;
+
+    if (sec.group !== curGroup) {
+      curGroup = sec.group; chk(14); y += 3;
+      doc.setFillColor(20,20,35); doc.rect(m, y-5, W-m*2, 8,'F');
+      doc.setFillColor(240,192,64); doc.rect(m, y-5, 2.5, 8,'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(240,192,64);
+      doc.text(curGroup.toUpperCase(), m+6, y+0.5); y += 10;
+    }
+
+    chk(9);
+    doc.setFillColor(16,16,24); doc.rect(m, y-5, W-m*2, 7.5,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(210,210,225);
+    doc.text(`${sec.code}  ${sec.name}`, m+3, y-0.2);
+    doc.setFillColor(160,40,40); doc.roundedRect(W-m-18, y-5, 18, 7.5, 1, 1,'F');
+    doc.setFontSize(7); doc.setTextColor(255,220,220);
+    doc.text(`${miss.length} falt.`, W-m-9, y-0.2, {align:'center'});
+    y += 8;
+
+    const cols=9, cellW=(W-m*2)/cols, cellH=6;
+    for (let i=0; i<miss.length; i+=cols) {
+      chk(cellH+1);
+      const row = miss.slice(i, i+cols);
+      for (let j=0; j<row.length; j++) {
+        const cx = m + j*cellW;
+        doc.setFillColor(40,12,12); doc.setDrawColor(100,35,35);
+        doc.roundedRect(cx+0.5, y-4.5, cellW-1, cellH, 1,1,'FD');
+        doc.setFont('helvetica','bold'); doc.setFontSize(6); doc.setTextColor(255,120,90);
+        doc.text(row[j].code, cx+cellW/2, y-0.5, {align:'center'});
+      }
+      y += cellH+1;
+    }
+    y += 2;
+  }
+
+  // Footers
+  const pages = doc.getNumberOfPages();
+  for (let i=1; i<=pages; i++) {
+    doc.setPage(i); doc.setFillColor(16,16,24); doc.rect(0,H-9,W,9,'F');
+    doc.setFont('helvetica','normal'); doc.setFontSize(6); doc.setTextColor(70,70,90);
+    doc.text('Álbum Panini FIFA World Cup 2026™', m, H-3.5);
+    doc.text(`${i}/${pages}`, W-m, H-3.5, {align:'right'});
+  }
+  doc.save('panini-2026-faltantes.pdf');
+  showToast('✅ PDF guardado');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONFETTI & TOAST
+// ═══════════════════════════════════════════════════════════════
+let celebrating = false;
+function celebrate() {
+  if (celebrating) return; celebrating = true;
+  const colors = ['#f0c040','#e8a020','#30c060','#3080e8','#e03030','#ff6030'];
+  for (let i=0; i<30; i++) {
+    const el = document.createElement('div');
+    el.className = 'cp';
+    const sz = 6 + Math.random()*8;
+    el.style.cssText = `left:${Math.random()*100}vw;top:-10px;background:${colors[Math.floor(Math.random()*colors.length)]};
+      animation-delay:${Math.random()*0.8}s;width:${sz}px;height:${sz}px;border-radius:${Math.random()>.5?'50%':'2px'}`;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+  }
+  setTimeout(() => celebrating = false, 2000);
+}
+
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+window.showToast = showToast;
+window.renderAll = renderAll;
+window.updateStats = updateStats;
+
+// ═══════════════════════════════════════════════════════════════
+// PERFIL DE USUARIO
+// ═══════════════════════════════════════════════════════════════
+window.userProfile = {};  // { nickname, phone, city }
+
+function openProfile() {
+  const p = window.userProfile || {};
+  document.getElementById('profile-name').value  = p.nickname || '';
+  document.getElementById('profile-phone').value = p.phone    || '';
+  document.getElementById('profile-city').value  = p.city     || '';
+  document.getElementById('profile-modal').classList.add('open');
+}
+
+function closeProfile() {
+  document.getElementById('profile-modal').classList.remove('open');
+}
+
+async function saveProfile() {
+  const nickname = document.getElementById('profile-name').value.trim();
+  const phone    = document.getElementById('profile-phone').value.trim();
+  const city     = document.getElementById('profile-city').value.trim();
+
+  window.userProfile = { nickname, phone, city };
+
+  // Update header display name
+  const display = nickname || document.getElementById('user-name').dataset.gname || '';
+  if (nickname) document.getElementById('user-name').textContent = nickname;
+
+  // Save to Firestore via the cloud save function (merge into user doc)
+  try {
+    await window._saveProfileToCloud({ nickname, phone, city });
+    showToast('✅ Perfil guardado');
+  } catch(e) {
+    showToast('❌ Error al guardar perfil');
+  }
+  closeProfile();
+}
+
+// Close modal clicking overlay
+document.getElementById('profile-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeProfile();
+});
+
+window.openProfile  = openProfile;
+window.closeProfile = closeProfile;
+window.saveProfile  = saveProfile;
+
+
+</script>
+</body>
+</html>
