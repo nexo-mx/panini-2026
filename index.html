@@ -171,7 +171,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   background: linear-gradient(135deg, #a060f0, #6030c0);
   display: flex; align-items: center; justify-content: center;
   font-size: 40px;
-  box-shadow: 0 0 40px rgba(240,192,64,0.5);
+  box-shadow: 0 0 40px rgba(160,96,240,0.5);
   animation: pulse 2s ease-in-out infinite;
   margin-bottom: 24px;
 }
@@ -256,7 +256,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   background: linear-gradient(135deg, #0a0a0d 0%, #110d1a 40%, #0d0a14 100%);
   border-bottom: 2px solid var(--nexo);
   position: sticky; top: 0; z-index: 100;
-  box-shadow: 0 4px 40px rgba(240,192,64,0.15);
+  box-shadow: 0 4px 40px rgba(160,96,240,0.15);
 }
 
 .header-inner {
@@ -286,7 +286,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 
 #user-photo {
   width:32px; height:32px; border-radius:50%;
-  border:2px solid var(--gold);
+  border:2px solid var(--nexo);
   object-fit:cover;
 }
 
@@ -302,7 +302,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   border:none; border-radius:4px; cursor:pointer; transition:all 0.2s; white-space:nowrap;
 }
 .btn-gold { background:linear-gradient(135deg,var(--nexo2),var(--nexo)); color:white; }
-.btn-gold:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(240,192,64,0.4); }
+.btn-gold:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(160,96,240,0.4); }
 .btn-outline { background:transparent; color:#aaa; border:1px solid var(--border); }
 .btn-outline:hover { border-color:#666; color:var(--text); }
 .btn-danger { background:transparent; color:var(--red); border:1px solid rgba(224,48,48,0.4); }
@@ -337,7 +337,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   border-radius:6px; padding:8px 12px 8px 34px; color:var(--text);
   font-family:'Barlow',sans-serif; font-size:13px; outline:none;
 }
-.search-wrap input:focus { border-color:var(--gold); }
+.search-wrap input:focus { border-color:var(--nexo); }
 .search-wrap input::placeholder { color:#444; }
 .search-icon { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:#444; font-size:13px; }
 
@@ -397,7 +397,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 
 .card-info { flex:1; min-width:0; }
 .card-name { font-family:'Barlow Condensed',sans-serif; font-size:15px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--text); }
-.card-code { font-size:10px; color:var(--gold2); letter-spacing:2px; font-family:'Barlow Condensed',sans-serif; margin-top:1px; }
+.card-code { font-size:10px; color:var(--nexo2); letter-spacing:2px; font-family:'Barlow Condensed',sans-serif; margin-top:1px; }
 
 .card-meta { display:flex; align-items:center; gap:8px; flex-shrink:0; }
 
@@ -450,8 +450,8 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .sticker.special.got1 { border-color:#e03030; background:linear-gradient(135deg,#2a0808,#1a0000); }
 .sticker.special .s-code { color:#c04040; }
 .sticker.special.got1 .s-code { color:#e05050; }
-.sticker.shield { background:linear-gradient(135deg,#1a1208,#0e0800); border-color:#5a4010; }
-.sticker.shield.got1 { border-color:var(--gold); background:linear-gradient(135deg,#2a2010,#1a1000); }
+.sticker.shield { background:linear-gradient(135deg,#150a28,#0e0618); border-color:#5a3090; }
+.sticker.shield.got1 { border-color:var(--nexo); background:linear-gradient(135deg,#1e1030,#120820); }
 .sticker.photo  { background:linear-gradient(135deg,#101828,#080f1a); border-color:#1a4070; }
 .sticker.photo.got1  { border-color:var(--blue); }
 
@@ -460,8 +460,8 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .got2 .s-code { color:var(--blue); }
 .got3 .s-code { color:var(--orange); }
 .got4plus .s-code { color:#c060e0; }
-.shield .s-code { color:var(--gold2); }
-.shield.got1 .s-code { color:var(--gold); }
+.shield .s-code { color:var(--nexo2); }
+.shield.got1 .s-code { color:var(--nexo); }
 .photo .s-code { color:#5080c0; }
 
 .s-lbl { font-size:8px; color:#444; text-align:center; line-height:1.2; margin-top:2px; font-family:'Barlow Condensed',sans-serif; }
@@ -519,10 +519,10 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .refresh-btn {
   font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
   letter-spacing:2px; text-transform:uppercase; padding:7px 14px;
-  background:transparent; color:var(--gold); border:1px solid rgba(240,192,64,0.4);
+  background:transparent; color:var(--gold); border:1px solid rgba(160,96,240,0.4);
   border-radius:4px; cursor:pointer; transition:all 0.2s; margin-top:10px;
 }
-.refresh-btn:hover { background:rgba(240,192,64,0.1); }
+.refresh-btn:hover { background:rgba(160,96,240,0.1); }
 
 .user-trades-card {
   background:var(--surface); border:1px solid var(--border); border-radius:10px;
@@ -648,7 +648,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   font-family:'Barlow',sans-serif; font-size:14px; outline:none;
   transition:border-color 0.2s;
 }
-.form-group input:focus { border-color:var(--gold); }
+.form-group input:focus { border-color:var(--nexo); }
 .form-group input::placeholder { color:#444; }
 
 .modal-actions { display:flex; gap:10px; margin-top:20px; }
@@ -661,7 +661,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   border-radius:20px; padding:4px 12px 4px 4px;
   cursor:pointer; transition:border-color 0.2s;
 }
-.profile-btn:hover { border-color:var(--gold); }
+.profile-btn:hover { border-color:var(--nexo); }
 
 /* Contact info in trade card */
 .utc-contact {
@@ -764,6 +764,18 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 
     <div class="main">
       <div class="stats-bar">
+        <!-- Nexo brand mark -->
+        <div style="display:flex;align-items:center;gap:10px;margin-right:8px;">
+          <svg width="32" height="32" viewBox="0 0 80 80">
+            <rect width="80" height="80" rx="16" fill="#1a1a2a"/>
+            <line x1="20" y1="60" x2="20" y2="20" stroke="white" stroke-width="8" stroke-linecap="round"/>
+            <line x1="60" y1="60" x2="60" y2="20" stroke="white" stroke-width="8" stroke-linecap="round"/>
+            <line x1="20" y1="20" x2="60" y2="60" stroke="white" stroke-width="8" stroke-linecap="round"/>
+            <circle cx="40" cy="40" r="7" fill="#a060f0"/>
+          </svg>
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:5px;color:white;opacity:0.9;">NEXO</span>
+        </div>
+        <div class="stat-div"></div>
         <div class="stat"><span class="stat-n green" id="s-got">0</span><span class="stat-l">Conseguidas</span></div>
         <div class="stat-div"></div>
         <div class="stat"><span class="stat-n red"   id="s-miss">980</span><span class="stat-l">Faltantes</span></div>
@@ -1326,9 +1338,9 @@ function exportPDF() {
   drawBg();
 
   // Header
-  doc.setFillColor(25,15,5); doc.rect(0,0,W,28,'F');
-  doc.setFillColor(240,192,64); doc.rect(0,27,W,1.5,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(240,192,64);
+  doc.setFillColor(12,8,20); doc.rect(0,0,W,28,'F');
+  doc.setFillColor(160,96,240); doc.rect(0,27,W,1.5,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(160,96,240);
   doc.text('PANINI FIFA WORLD CUP 2026 — ESTAMPAS FALTANTES', m, 12);
   doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(150,150,150);
   const { got, missing } = getStats();
@@ -1348,14 +1360,14 @@ function exportPDF() {
 
     if (sec.group !== curGroup) {
       curGroup = sec.group; chk(14); y += 3;
-      doc.setFillColor(20,20,35); doc.rect(m, y-5, W-m*2, 8,'F');
-      doc.setFillColor(240,192,64); doc.rect(m, y-5, 2.5, 8,'F');
-      doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(240,192,64);
+      doc.setFillColor(18,12,30); doc.rect(m, y-5, W-m*2, 8,'F');
+      doc.setFillColor(160,96,240); doc.rect(m, y-5, 2.5, 8,'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(160,96,240);
       doc.text(curGroup.toUpperCase(), m+6, y+0.5); y += 10;
     }
 
     chk(9);
-    doc.setFillColor(16,16,24); doc.rect(m, y-5, W-m*2, 7.5,'F');
+    doc.setFillColor(12,10,20); doc.rect(m, y-5, W-m*2, 7.5,'F');
     doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(210,210,225);
     doc.text(`${sec.code}  ${sec.name}`, m+3, y-0.2);
     doc.setFillColor(160,40,40); doc.roundedRect(W-m-18, y-5, 18, 7.5, 1, 1,'F');
@@ -1382,7 +1394,7 @@ function exportPDF() {
   // Footers
   const pages = doc.getNumberOfPages();
   for (let i=1; i<=pages; i++) {
-    doc.setPage(i); doc.setFillColor(16,16,24); doc.rect(0,H-9,W,9,'F');
+    doc.setPage(i); doc.setFillColor(12,10,20); doc.rect(0,H-9,W,9,'F');
     doc.setFont('helvetica','normal'); doc.setFontSize(6); doc.setTextColor(70,70,90);
     doc.text('Álbum Panini FIFA World Cup 2026™', m, H-3.5);
     doc.text(`${i}/${pages}`, W-m, H-3.5, {align:'right'});
@@ -1397,7 +1409,7 @@ function exportPDF() {
 let celebrating = false;
 function celebrate() {
   if (celebrating) return; celebrating = true;
-  const colors = ['#f0c040','#e8a020','#30c060','#3080e8','#e03030','#ff6030'];
+  const colors = ['#a060f0','#c090ff','#30c060','#3080e8','#e03030','#8040d0'];
   for (let i=0; i<30; i++) {
     const el = document.createElement('div');
     el.className = 'cp';
