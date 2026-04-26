@@ -444,6 +444,10 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .sticker.got4plus { background:linear-gradient(135deg,#200a20,#150015); border-color:#c060e0; }
 
 /* Types */
+.sticker.special { background:linear-gradient(135deg,#1a0808,#0e0000); border-color:#8a1010; }
+.sticker.special.got1 { border-color:#e03030; background:linear-gradient(135deg,#2a0808,#1a0000); }
+.sticker.special .s-code { color:#c04040; }
+.sticker.special.got1 .s-code { color:#e05050; }
 .sticker.shield { background:linear-gradient(135deg,#1a1208,#0e0800); border-color:#5a4010; }
 .sticker.shield.got1 { border-color:var(--gold); background:linear-gradient(135deg,#2a2010,#1a1000); }
 .sticker.photo  { background:linear-gradient(135deg,#101828,#080f1a); border-color:#1a4070; }
@@ -826,8 +830,18 @@ function makeIntroStickers() {
   return labels.map((lbl, i) => ({ code: `FWC ${i+1}`, num: i+1, lbl, type: 'intro' }));
 }
 
+function makeCCStickers() {
+  const labels = [
+    'Logo CC','Anuncio 1','Anuncio 2','Anuncio 3','Anuncio 4',
+    'Anuncio 5','Anuncio 6','Anuncio 7','Anuncio 8','Anuncio 9',
+    'Anuncio 10','Anuncio 11','Anuncio 12','Anuncio 13'
+  ];
+  return labels.map((lbl, i) => ({ code: `CC ${i+1}`, num: i+1, lbl, type: 'special' }));
+}
+
 const SECTIONS = [
   { id:'FWC', name:'Introducción / World Cup', code:'FWC', flag:'🏆', group:'Introducción',  stickers: makeIntroStickers() },
+  { id:'CC',  name:'Coca-Cola',                  code:'CC',  flag:'🥤', group:'Introducción',  stickers: makeCCStickers() },
   { id:'MEX', name:'México',          code:'MEX', flag:'🇲🇽', group:'Grupo A', stickers: makeTeamStickers('MEX') },
   { id:'RSA', name:'Sudáfrica',       code:'RSA', flag:'🇿🇦', group:'Grupo A', stickers: makeTeamStickers('RSA') },
   { id:'KOR', name:'Corea del Sur',   code:'KOR', flag:'🇰🇷', group:'Grupo A', stickers: makeTeamStickers('KOR') },
@@ -967,9 +981,10 @@ function applySlotClass(el, n, type) {
   else if (n === 3) el.classList.add('got3');
   else if (n >= 4)  el.classList.add('got4plus');
   // Keep type classes
-  el.classList.remove('shield','photo');
-  if (type === 'shield') el.classList.add('shield');
-  if (type === 'photo')  el.classList.add('photo');
+  el.classList.remove('shield','photo','special');
+  if (type === 'shield')  el.classList.add('shield');
+  if (type === 'photo')   el.classList.add('photo');
+  if (type === 'special') el.classList.add('special');
 }
 
 function refreshCardCounters(code) {
@@ -1086,7 +1101,7 @@ function renderCard(sec, q) {
     stickersHtml += `
       <div class="sticker${typeCls}${gotCls}${highlighted?' hl':''}" data-key="${s.code}" title="${s.code} · ${s.lbl}">
         <span class="s-code">${s.code}</span>
-        <span class="s-lbl">${s.type==='shield'?'🛡 Escudo':s.type==='photo'?'📸 Grupal':s.lbl}</span>
+        <span class="s-lbl">${s.type==='shield'?'🛡 Escudo':s.type==='photo'?'📸 Grupal':s.type==='special'?'🥤 CC':s.lbl}</span>
         ${n > 1 ? `<div class="s-count">${n}</div>` : ''}
         <div class="sticker-actions">
           <button class="s-btn minus" onclick="removeSticker('${s.code}');event.stopPropagation()">−</button>
