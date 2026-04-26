@@ -577,6 +577,9 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .chip-give { background:rgba(48,192,96,0.1); color:var(--green); border:1px solid rgba(48,192,96,0.3); }
 .chip-want { background:rgba(48,128,232,0.1); color:var(--blue);  border:1px solid rgba(48,128,232,0.3); }
 .chip-count { font-size:9px; opacity:0.7; }
+.chip-holo { background:rgba(200,160,40,0.15); color:#d4a820; border:1px solid rgba(200,160,40,0.4); }
+.chip-holo-want { background:rgba(200,160,40,0.1); color:#c49010; border:1px solid rgba(200,160,40,0.3); }
+.chip-holo .chip-icon, .chip-holo-want .chip-icon { font-size:9px; }
 
 .no-trades { text-align:center; padding:40px 20px; color:#444; }
 .no-trades h3 { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:3px; color:#333; margin-bottom:6px; }
@@ -1185,6 +1188,17 @@ function togglePanel(code) {
 // ═══════════════════════════════════════════════════════════════
 // RENDER TRADES
 // ═══════════════════════════════════════════════════════════════
+// Detect if a sticker code is a hologram (shield pos 1, intro section 00/FWC)
+function isHolo(code) {
+  if (!code) return false;
+  // Full intro section: 00 1 and FWC 1-19
+  if (code.startsWith('00 ') || code.startsWith('FWC ')) return true;
+  // Shield = position 1 of any team (e.g. "MEX 1", "BRA 1")
+  const parts = code.split(' ');
+  if (parts.length === 2 && parts[1] === '1') return true;
+  return false;
+}
+
 window.renderTrades = function() {
   const container = document.getElementById('trades-content');
   if (!container) return;
@@ -1262,7 +1276,10 @@ window.renderTrades = function() {
     if (theyCanGive.length > 0) {
       html += `<div class="trade-section-title give">✅ Ellos tienen repetidas que a ti te faltan (${theyCanGive.length})</div><div class="trade-chips">`;
       for (const { code, extras } of theyCanGive) {
-        html += `<div class="chip chip-give">${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
+        const holo = isHolo(code);
+        const cls  = holo ? 'chip chip-holo' : 'chip chip-give';
+        const icon = holo ? '<span class="chip-icon">✨</span> ' : '';
+        html += `<div class="${cls}">${icon}${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
       }
       html += `</div>`;
     }
@@ -1270,7 +1287,10 @@ window.renderTrades = function() {
     if (theyNeed.length > 0) {
       html += `<div class="trade-section-title want">🔵 Tú tienes repetidas que a ellos les faltan (${theyNeed.length})</div><div class="trade-chips">`;
       for (const { code, extras } of theyNeed) {
-        html += `<div class="chip chip-want">${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
+        const holo = isHolo(code);
+        const cls  = holo ? 'chip chip-holo-want' : 'chip chip-want';
+        const icon = holo ? '<span class="chip-icon">✨</span> ' : '';
+        html += `<div class="${cls}">${icon}${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
       }
       html += `</div>`;
     }
