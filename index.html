@@ -52,15 +52,25 @@ onAuthStateChanged(auth, async user => {
   if (user) {
     showApp(user);
     subscribeToMyData(user.uid);
-    // Load profile
+    // Load profile — show onboarding if incomplete
     try {
       const snap = await getDoc(doc(db, 'users', user.uid));
       if (snap.exists() && snap.data().profile) {
         window.userProfile = snap.data().profile;
         const n = document.getElementById('user-name');
         if (n && window.userProfile.nickname) n.textContent = window.userProfile.nickname;
+        // Show onboarding if missing required fields
+        const p = window.userProfile;
+        if (!p.phone || !p.city || !p.mode) {
+          setTimeout(() => showOnboarding(p), 600);
+        }
+      } else {
+        // Brand new user — show onboarding
+        setTimeout(() => showOnboarding({}), 600);
       }
-    } catch(e) {}
+    } catch(e) {
+      setTimeout(() => showOnboarding({}), 600);
+    }
     await loadAllUsersData();
   } else {
     showLogin();
@@ -618,6 +628,117 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 ::-webkit-scrollbar-track { background:var(--bg); }
 ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
 
+/* ── PRICE BANNER ─────────────────────────────────────────── */
+.price-banner {
+  background: linear-gradient(135deg, #12100a, #1a1508);
+  border: 1px solid rgba(200,160,40,0.3);
+  border-radius: 10px;
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.price-banner-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #8a6a10;
+  margin-bottom: 8px;
+}
+.price-items { display: flex; gap: 16px; flex-wrap: wrap; }
+.price-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(200,160,40,0.08);
+  border: 1px solid rgba(200,160,40,0.2);
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+.price-icon { font-size: 18px; }
+.price-info {}
+.price-name { font-family: 'Barlow Condensed', sans-serif; font-size: 12px; color: #aaa; letter-spacing: 1px; }
+.price-val  { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #d4a820; letter-spacing: 1px; line-height: 1; }
+.price-note { font-size: 10px; color: #555; margin-top: 2px; font-family: 'Barlow Condensed', sans-serif; }
+
+/* ── MODE BADGE ────────────────────────────────────────────── */
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+.mode-swap { background: rgba(48,192,96,0.12); color: var(--green); border: 1px solid rgba(48,192,96,0.3); }
+.mode-both { background: rgba(160,96,240,0.12); color: var(--nexo); border: 1px solid rgba(160,96,240,0.3); }
+
+/* ── ONBOARDING MODAL ──────────────────────────────────────── */
+.onboarding-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.92);
+  z-index: 600;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(6px);
+}
+.onboarding-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 32px;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.7);
+}
+.onboarding-box .ob-icon {
+  width: 56px; height: 56px;
+  background: linear-gradient(135deg, var(--nexo2), var(--nexo));
+  border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px;
+  margin-bottom: 16px;
+}
+.onboarding-box h2 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 26px; letter-spacing: 4px;
+  color: white; margin-bottom: 4px;
+}
+.onboarding-box .ob-sub {
+  font-size: 13px; color: #666; margin-bottom: 24px; line-height: 1.5;
+}
+.ob-step {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--nexo); margin-bottom: 16px;
+}
+.mode-selector { display: flex; gap: 10px; margin-top: 6px; }
+.mode-opt {
+  flex: 1; padding: 12px 8px; border-radius: 10px;
+  border: 2px solid var(--border);
+  background: var(--surface2);
+  cursor: pointer; text-align: center;
+  transition: all 0.2s;
+}
+.mode-opt:hover { border-color: #555; }
+.mode-opt.selected { border-color: var(--nexo); background: rgba(160,96,240,0.08); }
+.mode-opt .mo-icon { font-size: 22px; margin-bottom: 6px; }
+.mode-opt .mo-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 13px; font-weight: 700; letter-spacing: 1px;
+  color: var(--text); display: block;
+}
+.mode-opt .mo-desc { font-size: 11px; color: #555; margin-top: 2px; }
+.mode-opt.selected .mo-name { color: var(--nexo); }
+
 /* ── MODAL PERFIL ─────────────────────────────────────────── */
 .modal-overlay {
   position:fixed; inset:0; background:rgba(0,0,0,0.75);
@@ -802,9 +923,74 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
       <p>Aquí ves quién tiene repetidas que a ti te faltan, y quién necesita lo que a ti te sobra. ¡Coordina tus intercambios!</p>
       <button class="refresh-btn" onclick="loadAllUsersData().then(renderTrades)">↻ Actualizar</button>
     </div>
+
+    <!-- PRICE BANNER -->
+    <div class="price-banner">
+      <div>
+        <div class="price-banner-title">💲 Precios sugeridos de venta</div>
+        <div class="price-items">
+          <div class="price-item">
+            <span class="price-icon">🃏</span>
+            <div class="price-info">
+              <div class="price-name">Estampa normal</div>
+              <div class="price-val">$4</div>
+              <div class="price-note">precio sugerido</div>
+            </div>
+          </div>
+          <div class="price-item">
+            <span class="price-icon">✨</span>
+            <div class="price-info">
+              <div class="price-name">Hologramas / Escudos</div>
+              <div class="price-val">$15</div>
+              <div class="price-note">precio sugerido</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="trades-content"><p style="color:#555;text-align:center;padding:40px">Cargando usuarios...</p></div>
   </div>
 
+
+<!-- ══ ONBOARDING MODAL (primer acceso / perfil incompleto) ══ -->
+<div class="onboarding-overlay" id="onboarding-modal" style="display:none;">
+  <div class="onboarding-box">
+    <div class="ob-icon">👋</div>
+    <div class="ob-step">Bienvenido a Nexo · Paso 1 de 1</div>
+    <h2>Tu Perfil</h2>
+    <p class="ob-sub">Antes de continuar necesitamos algunos datos para que puedas coordinar intercambios con otros coleccionistas.</p>
+    <div class="form-group">
+      <label>Nombre para mostrar *</label>
+      <input type="text" id="ob-name" placeholder="Ej: Carlos G." maxlength="40">
+    </div>
+    <div class="form-group">
+      <label>WhatsApp *</label>
+      <input type="tel" id="ob-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
+    </div>
+    <div class="form-group">
+      <label>Ciudad *</label>
+      <input type="text" id="ob-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
+    </div>
+    <div class="form-group">
+      <label>¿Cómo quieres participar?</label>
+      <div class="mode-selector">
+        <div class="mode-opt" id="mode-swap" onclick="selectMode('swap')">
+          <div class="mo-icon">🔄</div>
+          <span class="mo-name">Solo cambios</span>
+          <div class="mo-desc">Intercambio estampa por estampa</div>
+        </div>
+        <div class="mode-opt" id="mode-both" onclick="selectMode('both')">
+          <div class="mo-icon">💰</div>
+          <span class="mo-name">Compra, venta y cambios</span>
+          <div class="mo-desc">Compro, vendo e intercambio</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions" style="margin-top:24px;">
+      <button class="btn btn-gold" style="width:100%;padding:14px;" onclick="saveOnboarding()">Entrar a Nexo →</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══ MODAL PERFIL ══════════════════════════════════════════ -->
 <div class="modal-overlay" id="profile-modal">
@@ -820,8 +1006,23 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
       <input type="tel" id="profile-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
     </div>
     <div class="form-group">
-      <label>Ciudad (opcional)</label>
-      <input type="text" id="profile-city" placeholder="Ej: León, Guanajuato" maxlength="40">
+      <label>Ciudad</label>
+      <input type="text" id="profile-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
+    </div>
+    <div class="form-group">
+      <label>¿Cómo participas?</label>
+      <div class="mode-selector">
+        <div class="mode-opt" id="pmode-swap" onclick="selectProfileMode('swap')">
+          <div class="mo-icon">🔄</div>
+          <span class="mo-name">Solo cambios</span>
+          <div class="mo-desc">Intercambio estampa por estampa</div>
+        </div>
+        <div class="mode-opt" id="pmode-both" onclick="selectProfileMode('both')">
+          <div class="mo-icon">💰</div>
+          <span class="mo-name">Compra, venta y cambios</span>
+          <div class="mo-desc">Compro, vendo e intercambio</div>
+        </div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeProfile()">Cancelar</button>
@@ -1259,7 +1460,12 @@ window.renderTrades = function() {
           ${uPhoto ? `<img src="${uPhoto}" alt="">` : '👤'}
         </div>
         <div class="utc-info">
-          <div class="utc-name">${uName}</div>
+          <div class="utc-name" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            ${uName}
+            ${udata.profile?.mode === 'both'
+              ? '<span class="mode-badge mode-both">💰 Compra, venta y cambios</span>'
+              : '<span class="mode-badge mode-swap">🔄 Solo cambios</span>'}
+          </div>
           <div class="utc-summary">
             ${theyCanGive.length > 0 ? `Te puede dar ${theyCanGive.length} estampas` : ''}
             ${theyCanGive.length > 0 && theyNeed.length > 0 ? ' · ' : ''}
@@ -1458,13 +1664,64 @@ window.updateStats = updateStats;
 // ═══════════════════════════════════════════════════════════════
 // PERFIL DE USUARIO
 // ═══════════════════════════════════════════════════════════════
-window.userProfile = {};  // { nickname, phone, city }
+window.userProfile = {};
 
+// ── ONBOARDING ────────────────────────────────────────────────
+let selectedMode = '';
+let selectedProfileMode = '';
+
+function showOnboarding(existingProfile) {
+  const ob = document.getElementById('onboarding-modal');
+  if (!ob) return;
+  // Pre-fill if editing
+  if (existingProfile.nickname) document.getElementById('ob-name').value  = existingProfile.nickname;
+  if (existingProfile.phone)    document.getElementById('ob-phone').value = existingProfile.phone;
+  if (existingProfile.city)     document.getElementById('ob-city').value  = existingProfile.city;
+  if (existingProfile.mode)     selectMode(existingProfile.mode);
+  ob.style.display = 'flex';
+}
+
+function selectMode(mode) {
+  selectedMode = mode;
+  document.getElementById('mode-swap').classList.toggle('selected', mode === 'swap');
+  document.getElementById('mode-both').classList.toggle('selected', mode === 'both');
+}
+
+async function saveOnboarding() {
+  const nickname = document.getElementById('ob-name').value.trim();
+  const phone    = document.getElementById('ob-phone').value.trim();
+  const city     = document.getElementById('ob-city').value.trim();
+  const mode     = selectedMode;
+
+  if (!nickname) { showToast('⚠️ Escribe tu nombre'); return; }
+  if (!phone)    { showToast('⚠️ Escribe tu WhatsApp'); return; }
+  if (!city)     { showToast('⚠️ Escribe tu ciudad'); return; }
+  if (!mode)     { showToast('⚠️ Elige cómo quieres participar'); return; }
+
+  window.userProfile = { nickname, phone, city, mode };
+  const n = document.getElementById('user-name');
+  if (n) n.textContent = nickname;
+
+  try {
+    await window._saveProfileToCloud({ nickname, phone, city, mode });
+    document.getElementById('onboarding-modal').style.display = 'none';
+    showToast('✅ ¡Bienvenido a Nexo!');
+  } catch(e) {
+    showToast('❌ Error al guardar, intenta de nuevo');
+  }
+}
+
+window.showOnboarding  = showOnboarding;
+window.selectMode      = selectMode;
+window.saveOnboarding  = saveOnboarding;
+
+// ── PROFILE MODAL ─────────────────────────────────────────────
 function openProfile() {
   const p = window.userProfile || {};
   document.getElementById('profile-name').value  = p.nickname || '';
   document.getElementById('profile-phone').value = p.phone    || '';
   document.getElementById('profile-city').value  = p.city     || '';
+  if (p.mode) selectProfileMode(p.mode);
   document.getElementById('profile-modal').classList.add('open');
 }
 
@@ -1472,35 +1729,46 @@ function closeProfile() {
   document.getElementById('profile-modal').classList.remove('open');
 }
 
+function selectProfileMode(mode) {
+  selectedProfileMode = mode;
+  const s = document.getElementById('pmode-swap');
+  const b = document.getElementById('pmode-both');
+  if (s) s.classList.toggle('selected', mode === 'swap');
+  if (b) b.classList.toggle('selected', mode === 'both');
+}
+
 async function saveProfile() {
   const nickname = document.getElementById('profile-name').value.trim();
   const phone    = document.getElementById('profile-phone').value.trim();
   const city     = document.getElementById('profile-city').value.trim();
+  const mode     = selectedProfileMode || window.userProfile.mode || '';
 
-  window.userProfile = { nickname, phone, city };
+  if (!nickname) { showToast('⚠️ Escribe tu nombre'); return; }
+  if (!phone)    { showToast('⚠️ Escribe tu WhatsApp'); return; }
+  if (!city)     { showToast('⚠️ Escribe tu ciudad'); return; }
+  if (!mode)     { showToast('⚠️ Elige cómo quieres participar'); return; }
 
-  // Update header display name
-  const display = nickname || document.getElementById('user-name').dataset.gname || '';
-  if (nickname) document.getElementById('user-name').textContent = nickname;
+  window.userProfile = { nickname, phone, city, mode };
+  const n = document.getElementById('user-name');
+  if (n) n.textContent = nickname;
 
-  // Save to Firestore via the cloud save function (merge into user doc)
   try {
-    await window._saveProfileToCloud({ nickname, phone, city });
-    showToast('✅ Perfil guardado');
+    await window._saveProfileToCloud({ nickname, phone, city, mode });
+    showToast('✅ Perfil actualizado');
   } catch(e) {
     showToast('❌ Error al guardar perfil');
   }
   closeProfile();
 }
 
-// Close modal clicking overlay
 document.getElementById('profile-modal').addEventListener('click', function(e) {
   if (e.target === this) closeProfile();
 });
 
-window.openProfile  = openProfile;
-window.closeProfile = closeProfile;
-window.saveProfile  = saveProfile;
+window.openProfile      = openProfile;
+window.closeProfile     = closeProfile;
+window.saveProfile      = saveProfile;
+window.selectProfileMode = selectProfileMode;
 
 
 </script>
