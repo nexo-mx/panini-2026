@@ -12,7 +12,8 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs }
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs,
+  addDoc, updateDoc, query, where, orderBy, serverTimestamp, deleteDoc }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 // ─── REEMPLAZA ESTOS VALORES CON LOS DE TU PROYECTO FIREBASE ───
@@ -71,6 +72,8 @@ onAuthStateChanged(auth, async user => {
     } catch(e) {
       setTimeout(() => showOnboarding({}), 600);
     }
+    window._currentUid = user.uid;
+    subscribeToTrades(user.uid);
     await loadAllUsersData();
   } else {
     showLogin();
@@ -101,6 +104,121 @@ function subscribeToMyData(uid) {
     }
   });
 }
+
+// ── TRADE LISTENERS ──────────────────────────────────────────
+let unsubTrades = null;
+
+function subscribeToTrades(uid) {
+  if (unsubTrades) unsubTrades();
+  // Listen to trades where I am involved (as sender or receiver)
+  const q = query(
+    collection(db, 'trades'),
+    where('participants', 'array-contains', uid),
+    orderBy('updatedAt', 'desc')
+  );
+  unsubTrades = onSnapshot(q, snap => {
+    window.myTrades = [];
+    snap.forEach(d => window.myTrades.push({ id: d.id, ...d.data() }));
+    updateTradeNotificationBadge();
+    if (document.getElementById('tab-messages')?.style.display !== 'none') {
+      renderMessages();
+    }
+  });
+}
+
+function updateTradeNotificationBadge() {
+  const uid = window._currentUid;
+  if (!uid) return;
+  const pending = (window.myTrades || []).filter(t =>
+    t.status === 'proposed' && t.toUid === uid
+  ).length;
+  const badge = document.getElementById('msg-badge');
+  if (badge) {
+    badge.textContent = pending;
+    badge.style.display = pending > 0 ? 'flex' : 'none';
+  }
+}
+
+window._currentUid = null;
+
+// ── TRADE ACTIONS (called from JS) ───────────────────────────
+window.sendTradeProposal = async (toUid, iOffer, iWant) => {
+  const uid  = window._currentUid;
+  const me   = window.userProfile;
+  const them = window.allUsersData[toUid];
+  if (!uid || !them) return;
+  await addDoc(collection(db, 'trades'), {
+    fromUid:      uid,
+    toUid:        toUid,
+    fromName:     me.nickname  || 'Usuario',
+    toName:       (them.profile?.nickname) || them.displayName || 'Usuario',
+    participants: [uid, toUid],
+    iOffer,   // codes I offer (my duplicates)
+    iWant,    // codes I want from them
+    status:   'proposed',  // proposed | countered | accepted | completed_a | completed_b | done | rejected
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+};
+
+window.respondTrade = async (tradeId, action, counterOffer, counterWant) => {
+  const ref = doc(db, 'trades', tradeId);
+  if (action === 'accept') {
+    await updateDoc(ref, { status: 'accepted', updatedAt: serverTimestamp() });
+  } else if (action === 'reject') {
+    await updateDoc(ref, { status: 'rejected', updatedAt: serverTimestamp() });
+  } else if (action === 'counter') {
+    await updateDoc(ref, {
+      status: 'proposed',
+      fromUid:  window._currentUid,
+      toUid:    counterOffer.toUid,
+      fromName: window.userProfile.nickname,
+      toName:   counterOffer.toName,
+      iOffer:   counterOffer.iOffer,
+      iWant:    counterOffer.iWant,
+      updatedAt: serverTimestamp(),
+    });
+  }
+};
+
+window.markCompleted = async (tradeId) => {
+  const uid   = window._currentUid;
+  const trade = (window.myTrades || []).find(t => t.id === tradeId);
+  if (!trade) return;
+
+  const confirmed = confirm(
+    '¿Estás seguro? Esto eliminará los stickers faltantes y repetidos que cambiaste, de tu lista.'
+  );
+  if (!confirmed) return;
+
+  const ref = doc(db, 'trades', tradeId);
+  const isFrom = trade.fromUid === uid;
+
+  // Determine what I gave and what I received
+  const iGave     = isFrom ? trade.iOffer : trade.iWant;
+  const iReceived = isFrom ? trade.iWant  : trade.iOffer;
+
+  // Update my stickers
+  const newCollected = { ...window.collected };
+  for (const code of iGave) {
+    if ((newCollected[code] || 0) > 0) newCollected[code] = (newCollected[code] || 1) - 1;
+  }
+  for (const code of iReceived) {
+    newCollected[code] = Math.min((newCollected[code] || 0) + 1, 1); // mark as got if missing
+  }
+  window.collected = newCollected;
+  await window._saveToCloud(newCollected);
+
+  // Mark my side as completed
+  const newStatus = trade.status === 'completed_a'
+    ? 'done'
+    : (isFrom ? 'completed_a' : 'completed_b');
+  await updateDoc(ref, { status: newStatus, updatedAt: serverTimestamp() });
+
+  renderAll();
+  updateStats();
+  showToast('✅ ¡Intercambio registrado!');
+};
 
 window.loadAllUsersData = async () => {
   if (!currentUser) return;
@@ -872,6 +990,10 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   <div class="tabs">
     <button class="tab active" onclick="switchTab('album', this)">📖 Mi Álbum</button>
     <button class="tab" onclick="switchTab('trades', this)">🔄 Intercambios</button>
+    <button class="tab" onclick="switchTab('messages', this)" style="position:relative;">
+      💬 Mensajes
+      <span id="msg-badge" style="display:none;position:absolute;top:6px;right:4px;background:var(--red);color:white;font-family:'Bebas Neue',sans-serif;font-size:10px;width:16px;height:16px;border-radius:50%;align-items:center;justify-content:center;line-height:1;">0</span>
+    </button>
   </div>
 
   <!-- ── TAB: ÁLBUM ─────────────────────────────────────────── -->
@@ -951,46 +1073,6 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
     <div id="trades-content"><p style="color:#555;text-align:center;padding:40px">Cargando usuarios...</p></div>
   </div>
 
-
-<!-- ══ ONBOARDING MODAL (primer acceso / perfil incompleto) ══ -->
-<div class="onboarding-overlay" id="onboarding-modal" style="display:none;">
-  <div class="onboarding-box">
-    <div class="ob-icon">👋</div>
-    <div class="ob-step">Bienvenido a Nexo · Paso 1 de 1</div>
-    <h2>Tu Perfil</h2>
-    <p class="ob-sub">Antes de continuar necesitamos algunos datos para que puedas coordinar intercambios con otros coleccionistas.</p>
-    <div class="form-group">
-      <label>Nombre para mostrar *</label>
-      <input type="text" id="ob-name" placeholder="Ej: Carlos G." maxlength="40">
-    </div>
-    <div class="form-group">
-      <label>WhatsApp *</label>
-      <input type="tel" id="ob-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
-    </div>
-    <div class="form-group">
-      <label>Ciudad *</label>
-      <input type="text" id="ob-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
-    </div>
-    <div class="form-group">
-      <label>¿Cómo quieres participar?</label>
-      <div class="mode-selector">
-        <div class="mode-opt" id="mode-swap" onclick="selectMode('swap')">
-          <div class="mo-icon">🔄</div>
-          <span class="mo-name">Solo cambios</span>
-          <div class="mo-desc">Intercambio estampa por estampa</div>
-        </div>
-        <div class="mode-opt" id="mode-both" onclick="selectMode('both')">
-          <div class="mo-icon">💰</div>
-          <span class="mo-name">Compra, venta y cambios</span>
-          <div class="mo-desc">Compro, vendo e intercambio</div>
-        </div>
-      </div>
-    </div>
-    <div class="modal-actions" style="margin-top:24px;">
-      <button class="btn btn-gold" style="width:100%;padding:14px;" onclick="saveOnboarding()">Entrar a Nexo →</button>
-    </div>
-  </div>
-</div>
 
 <!-- ══ MODAL PERFIL ══════════════════════════════════════════ -->
 <div class="modal-overlay" id="profile-modal">
@@ -1517,6 +1599,17 @@ window.renderTrades = function() {
         <div class="utc-contact-phone">${contactPhone || '<span style="color:#444;font-style:italic">Sin teléfono registrado</span>'}</div>
       </div>
       ${waLink ? `<a class="utc-contact-wa" href="${waLink}" target="_blank">WhatsApp 💬</a>` : ''}
+    </div>
+    <div style="padding:0 16px 14px;">
+      <button onclick="openProposal('${uid}')"
+        style="width:100%;font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;
+        letter-spacing:2px;text-transform:uppercase;padding:9px;border-radius:8px;cursor:pointer;
+        background:rgba(160,96,240,0.1);color:var(--nexo);border:1px solid rgba(160,96,240,0.3);
+        transition:all 0.2s;"
+        onmouseover="this.style.background='rgba(160,96,240,0.2)'"
+        onmouseout="this.style.background='rgba(160,96,240,0.1)'">
+        🔄 Proponer intercambio
+      </button>
     </div>`;
     html += `</div></div>`;
   }
@@ -1542,11 +1635,11 @@ function toggleUtc(id) {
 function switchTab(tab, btn) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('tab-album').style.display  = tab === 'album'  ? 'block' : 'none';
-  document.getElementById('tab-trades').style.display = tab === 'trades' ? 'block' : 'none';
-  if (tab === 'trades') {
-    window.loadAllUsersData().then(window.renderTrades);
-  }
+  document.getElementById('tab-album').style.display    = tab === 'album'    ? 'block' : 'none';
+  document.getElementById('tab-trades').style.display   = tab === 'trades'   ? 'block' : 'none';
+  document.getElementById('tab-messages').style.display = tab === 'messages' ? 'block' : 'none';
+  if (tab === 'trades')   window.loadAllUsersData().then(window.renderTrades);
+  if (tab === 'messages') renderMessages();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1662,6 +1755,228 @@ window.renderAll = renderAll;
 window.updateStats = updateStats;
 
 // ═══════════════════════════════════════════════════════════════
+// MESSAGING & TRADE PROPOSAL SYSTEM
+// ═══════════════════════════════════════════════════════════════
+
+window.myTrades = [];
+let proposalTargetUid  = null;
+let proposalOfferCodes = new Set();
+let proposalWantCodes  = new Set();
+
+// ── RENDER MESSAGES TAB ───────────────────────────────────────
+function renderMessages() {
+  const container = document.getElementById('messages-content');
+  if (!container) return;
+  const uid    = window._currentUid;
+  const trades = window.myTrades || [];
+
+  if (trades.length === 0) {
+    container.innerHTML = `
+      <div class="msg-empty">
+        <div style="font-size:48px;margin-bottom:16px;">💬</div>
+        <h3>Sin mensajes aún</h3>
+        <p>Ve a <strong>Intercambios</strong> y toca<br>"Proponer intercambio" con alguien.</p>
+      </div>`;
+    return;
+  }
+
+  let html = '';
+  for (const trade of trades) {
+    const isFrom   = trade.fromUid === uid;
+    const otherName = isFrom ? trade.toName : trade.fromName;
+    const iOffer   = isFrom ? trade.iOffer : trade.iWant;
+    const iWant    = isFrom ? trade.iWant  : trade.iOffer;
+    const status   = trade.status;
+    const isMyTurn = status === 'proposed' && trade.toUid === uid;
+    const bothDone = status === 'done';
+    const iDid     = (status === 'completed_a' && trade.fromUid === uid) ||
+                     (status === 'completed_b' && trade.toUid   === uid);
+
+    // Status label
+    let statusLabel = '', statusCls = '';
+    if (status === 'proposed' && isMyTurn)  { statusLabel = '⏳ Te proponen'; statusCls = 'status-proposed'; }
+    else if (status === 'proposed')          { statusLabel = '📤 Enviada';     statusCls = 'status-proposed'; }
+    else if (status === 'accepted')          { statusLabel = '✅ Aceptada';    statusCls = 'status-accepted'; }
+    else if (status === 'completed_a' || status === 'completed_b') { statusLabel = '🤝 Pendiente'; statusCls = 'status-pending'; }
+    else if (status === 'done')              { statusLabel = '🎉 Completada';  statusCls = 'status-done'; }
+    else if (status === 'rejected')          { statusLabel = '❌ Rechazada';   statusCls = 'status-rejected'; }
+
+    // Sticker chips
+    const offerChips = (iOffer || []).map(c => {
+      const holo = isHolo(c);
+      return `<span class="chip-mini ${holo ? 'chip-mini-holo' : 'chip-mini-give'}">${holo ? '✨' : ''} ${c}</span>`;
+    }).join('');
+    const wantChips = (iWant || []).map(c => {
+      const holo = isHolo(c);
+      return `<span class="chip-mini ${holo ? 'chip-mini-holo' : 'chip-mini-want'}">${holo ? '✨' : ''} ${c}</span>`;
+    }).join('');
+
+    // Actions
+    let actions = '';
+    if (status === 'proposed' && isMyTurn) {
+      actions = `
+        <button class="btn-accept"   onclick="respondTrade('${trade.id}','accept')">✅ Aceptar</button>
+        <button class="btn-reject"   onclick="respondTrade('${trade.id}','reject')">❌ Rechazar</button>`;
+    }
+    if (status === 'accepted' && !iDid) {
+      actions = `<button class="btn-complete" onclick="markCompleted('${trade.id}')">🤝 Intercambio completado</button>`;
+    }
+    if ((status === 'completed_a' || status === 'completed_b') && !iDid) {
+      actions = `<button class="btn-complete" onclick="markCompleted('${trade.id}')">🤝 Intercambio completado</button>`;
+    }
+    if (iDid && status !== 'done') {
+      actions = `<span style="font-size:12px;color:#555;font-family:'Barlow Condensed',sans-serif;letter-spacing:1px;">⏳ Esperando confirmación del otro</span>`;
+    }
+
+    html += `
+    <div class="trade-card">
+      <div class="trade-card-header">
+        <div class="tc-avatar">👤</div>
+        <div class="tc-info">
+          <div class="tc-title">${isFrom ? '→' : '←'} ${otherName}</div>
+          <div class="tc-sub">${isFrom ? 'Tú propusiste' : 'Te propuso'} · ${trade.createdAt?.toDate?.()?.toLocaleDateString('es-MX') || 'Hoy'}</div>
+        </div>
+        <div class="tc-status ${statusCls}">${statusLabel}</div>
+      </div>
+      <div class="trade-card-body">
+        <div class="trade-stickers-row">
+          <div class="trade-stickers-col">
+            <div class="trade-stickers-label give">Yo doy</div>
+            <div class="trade-chips-mini">${offerChips || '<span style="color:#444;font-size:11px">—</span>'}</div>
+          </div>
+          <div style="color:#333;font-size:20px;padding-top:20px;">⇄</div>
+          <div class="trade-stickers-col">
+            <div class="trade-stickers-label want">Yo recibo</div>
+            <div class="trade-chips-mini">${wantChips || '<span style="color:#444;font-size:11px">—</span>'}</div>
+          </div>
+        </div>
+        ${actions ? `<div class="trade-actions">${actions}</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+window.renderMessages = renderMessages;
+
+// ── PROPOSAL MODAL ────────────────────────────────────────────
+function openProposal(targetUid) {
+  proposalTargetUid  = targetUid;
+  proposalOfferCodes = new Set();
+  proposalWantCodes  = new Set();
+
+  const them     = window.allUsersData[targetUid];
+  const theirStickers = them?.stickers || {};
+  const theirName = them?.profile?.nickname || them?.displayName || 'Usuario';
+
+  document.getElementById('prop-with').textContent = 'Con: ' + theirName;
+
+  // MY duplicates → I can offer
+  const myDups = [];
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      if ((window.collected[st.code] || 0) > 1) myDups.push(st.code);
+    }
+  }
+
+  // THEIR duplicates → I can request
+  const theirDups = [];
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      if ((theirStickers[st.code] || 0) > 1) theirDups.push(st.code);
+    }
+  }
+
+  // Render offer grid
+  const offerGrid = document.getElementById('prop-offer-grid');
+  if (myDups.length === 0) {
+    offerGrid.innerHTML = '<p style="color:#444;font-size:12px;">No tienes repetidas para ofrecer</p>';
+  } else {
+    offerGrid.innerHTML = myDups.map(c => {
+      const holo = isHolo(c);
+      return `<div class="prop-sticker ${holo?'holo':''}" data-code="${c}" data-type="offer"
+        onclick="togglePropSticker(this,'offer')">${holo?'✨ ':''}${c}</div>`;
+    }).join('');
+  }
+
+  // Render want grid
+  const wantGrid = document.getElementById('prop-want-grid');
+  if (theirDups.length === 0) {
+    wantGrid.innerHTML = '<p style="color:#444;font-size:12px;">No tienen repetidas disponibles</p>';
+  } else {
+    wantGrid.innerHTML = theirDups.map(c => {
+      const holo = isHolo(c);
+      return `<div class="prop-sticker ${holo?'holo':''}" data-code="${c}" data-type="want"
+        onclick="togglePropSticker(this,'want')">${holo?'✨ ':''}${c}</div>`;
+    }).join('');
+  }
+
+  updatePropSummary();
+  const pm = document.getElementById('proposal-modal'); pm.style.display = 'flex';
+}
+
+function closeProposal() {
+  document.getElementById('proposal-modal').style.display = 'none';
+}
+
+function togglePropSticker(el, type) {
+  const code = el.dataset.code;
+  if (type === 'offer') {
+    if (proposalOfferCodes.has(code)) { proposalOfferCodes.delete(code); el.classList.remove('selected-give'); }
+    else { proposalOfferCodes.add(code); el.classList.add('selected-give'); }
+  } else {
+    if (proposalWantCodes.has(code)) { proposalWantCodes.delete(code); el.classList.remove('selected-want'); }
+    else { proposalWantCodes.add(code); el.classList.add('selected-want'); }
+  }
+  updatePropSummary();
+}
+
+function updatePropSummary() {
+  const s = document.getElementById('prop-summary');
+  const o = [...proposalOfferCodes];
+  const w = [...proposalWantCodes];
+  if (o.length === 0 && w.length === 0) {
+    s.innerHTML = 'Selecciona al menos una estampa de cada lado'; return;
+  }
+  s.innerHTML =
+    (o.length ? `<span>Ofreces: </span>${o.map(c=>`<strong>${c}</strong>`).join(', ')}` : '') +
+    (o.length && w.length ? ' &nbsp;⇄&nbsp; ' : '') +
+    (w.length ? `<span>Pides: </span>${w.map(c=>`<strong>${c}</strong>`).join(', ')}` : '');
+}
+
+async function confirmProposal() {
+  const offer = [...proposalOfferCodes];
+  const want  = [...proposalWantCodes];
+  if (offer.length === 0) { showToast('⚠️ Selecciona estampas que ofreces'); return; }
+  if (want.length  === 0) { showToast('⚠️ Selecciona estampas que quieres'); return; }
+  try {
+    await window.sendTradeProposal(proposalTargetUid, offer, want);
+    closeProposal();
+    showToast('✅ Propuesta enviada');
+    // Switch to messages tab
+    const msgTab = document.querySelector('.tab:nth-child(3)');
+    if (msgTab) switchTab('messages', msgTab);
+  } catch(e) {
+    console.error(e);
+    showToast('❌ Error al enviar propuesta');
+  }
+}
+
+// Close proposal clicking overlay
+document.getElementById('proposal-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeProposal();
+});
+document.getElementById('onboarding-modal').addEventListener('click', function(e) {
+  // Onboarding cannot be closed by clicking outside — required
+});
+
+window.openProposal    = openProposal;
+window.closeProposal   = closeProposal;
+window.togglePropSticker = togglePropSticker;
+window.confirmProposal = confirmProposal;
+
+// ═══════════════════════════════════════════════════════════════
 // PERFIL DE USUARIO
 // ═══════════════════════════════════════════════════════════════
 window.userProfile = {};
@@ -1673,6 +1988,7 @@ let selectedProfileMode = '';
 function showOnboarding(existingProfile) {
   const ob = document.getElementById('onboarding-modal');
   if (!ob) return;
+  ob.style.display = 'flex';
   // Pre-fill if editing
   if (existingProfile.nickname) document.getElementById('ob-name').value  = existingProfile.nickname;
   if (existingProfile.phone)    document.getElementById('ob-phone').value = existingProfile.phone;
@@ -1772,5 +2088,70 @@ window.selectProfileMode = selectProfileMode;
 
 
 </script>
+
+<!-- ══ ONBOARDING MODAL — outside app so always visible ══════ -->
+<!-- ══ ONBOARDING MODAL (primer acceso / perfil incompleto) ══ -->
+<div class="onboarding-overlay" id="onboarding-modal" style="display:none;">
+  <div class="onboarding-box">
+    <div class="ob-icon">👋</div>
+    <div class="ob-step">Bienvenido a Nexo · Paso 1 de 1</div>
+    <h2>Tu Perfil</h2>
+    <p class="ob-sub">Antes de continuar necesitamos algunos datos para que puedas coordinar intercambios con otros coleccionistas.</p>
+    <div class="form-group">
+      <label>Nombre para mostrar *</label>
+      <input type="text" id="ob-name" placeholder="Ej: Carlos G." maxlength="40">
+    </div>
+    <div class="form-group">
+      <label>WhatsApp *</label>
+      <input type="tel" id="ob-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
+    </div>
+    <div class="form-group">
+      <label>Ciudad *</label>
+      <input type="text" id="ob-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
+    </div>
+    <div class="form-group">
+      <label>¿Cómo quieres participar?</label>
+      <div class="mode-selector">
+        <div class="mode-opt" id="mode-swap" onclick="selectMode('swap')">
+          <div class="mo-icon">🔄</div>
+          <span class="mo-name">Solo cambios</span>
+          <div class="mo-desc">Intercambio estampa por estampa</div>
+        </div>
+        <div class="mode-opt" id="mode-both" onclick="selectMode('both')">
+          <div class="mo-icon">💰</div>
+          <span class="mo-name">Compra, venta y cambios</span>
+          <div class="mo-desc">Compro, vendo e intercambio</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions" style="margin-top:24px;">
+      <button class="btn btn-gold" style="width:100%;padding:14px;" onclick="saveOnboarding()">Entrar a Nexo →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PROPOSAL MODAL — outside app so always visible ═══════ -->
+<div id="proposal-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:700;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);">
+  <div class="proposal-box">
+    <h2>Proponer Intercambio</h2>
+    <p class="prop-sub" id="prop-with">Con: —</p>
+
+    <div class="prop-section-title give">✅ Yo ofrezco (mis repetidas)</div>
+    <p style="font-size:11px;color:#444;margin-bottom:8px;">Selecciona las estampas que quieres dar</p>
+    <div class="prop-sticker-grid" id="prop-offer-grid"></div>
+
+    <div class="prop-section-title want">🟣 Yo quiero (sus repetidas)</div>
+    <p style="font-size:11px;color:#444;margin-bottom:8px;">Selecciona las estampas que quieres recibir</p>
+    <div class="prop-sticker-grid" id="prop-want-grid"></div>
+
+    <div class="prop-summary" id="prop-summary">Selecciona al menos una estampa de cada lado</div>
+
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeProposal()">Cancelar</button>
+      <button class="btn btn-gold" onclick="confirmProposal()">Enviar propuesta →</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
