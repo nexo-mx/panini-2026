@@ -1601,13 +1601,10 @@ window.renderTrades = function() {
       ${waLink ? `<a class="utc-contact-wa" href="${waLink}" target="_blank">WhatsApp 💬</a>` : ''}
     </div>
     <div style="padding:0 16px 14px;">
-      <button onclick="openProposal('${uid}')"
+      <button class="nexo-propose-btn" data-uid="${uid}"
         style="width:100%;font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;
         letter-spacing:2px;text-transform:uppercase;padding:9px;border-radius:8px;cursor:pointer;
-        background:rgba(160,96,240,0.1);color:var(--nexo);border:1px solid rgba(160,96,240,0.3);
-        transition:all 0.2s;"
-        onmouseover="this.style.background='rgba(160,96,240,0.2)'"
-        onmouseout="this.style.background='rgba(160,96,240,0.1)'">
+        background:rgba(160,96,240,0.1);color:var(--nexo);border:1px solid rgba(160,96,240,0.3);transition:all 0.2s;">
         🔄 Proponer intercambio
       </button>
     </div>`;
@@ -1619,6 +1616,16 @@ window.renderTrades = function() {
   }
 
   container.innerHTML = html;
+
+  // Event delegation — attach after innerHTML set
+  container.querySelectorAll('.nexo-propose-btn').forEach(btn => {
+    btn.addEventListener('mouseenter', () => btn.style.background = 'rgba(160,96,240,0.2)');
+    btn.addEventListener('mouseleave', () => btn.style.background = 'rgba(160,96,240,0.1)');
+    btn.addEventListener('click', () => {
+      const uid = btn.getAttribute('data-uid');
+      openProposal(uid);
+    });
+  });
 };
 
 function toggleUtc(id) {
@@ -1815,14 +1822,14 @@ function renderMessages() {
     let actions = '';
     if (status === 'proposed' && isMyTurn) {
       actions = `
-        <button class="btn-accept"   onclick="respondTrade('${trade.id}','accept')">✅ Aceptar</button>
-        <button class="btn-reject"   onclick="respondTrade('${trade.id}','reject')">❌ Rechazar</button>`;
+        <button class="btn-accept" data-trade-action="accept" data-trade-id="${trade.id}">✅ Aceptar</button>
+        <button class="btn-reject" data-trade-action="reject" data-trade-id="${trade.id}">❌ Rechazar</button>`;
     }
     if (status === 'accepted' && !iDid) {
-      actions = `<button class="btn-complete" onclick="markCompleted('${trade.id}')">🤝 Intercambio completado</button>`;
+      actions = `<button class="btn-complete" data-trade-action="complete" data-trade-id="${trade.id}">🤝 Intercambio completado</button>`;
     }
     if ((status === 'completed_a' || status === 'completed_b') && !iDid) {
-      actions = `<button class="btn-complete" onclick="markCompleted('${trade.id}')">🤝 Intercambio completado</button>`;
+      actions = `<button class="btn-complete" data-trade-action="complete" data-trade-id="${trade.id}">🤝 Intercambio completado</button>`;
     }
     if (iDid && status !== 'done') {
       actions = `<span style="font-size:12px;color:#555;font-family:'Barlow Condensed',sans-serif;letter-spacing:1px;">⏳ Esperando confirmación del otro</span>`;
@@ -1856,6 +1863,17 @@ function renderMessages() {
   }
 
   container.innerHTML = html;
+
+  // Wire up trade action buttons via event delegation
+  container.querySelectorAll('[data-trade-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action  = btn.getAttribute('data-trade-action');
+      const tradeId = btn.getAttribute('data-trade-id');
+      if (action === 'accept')   window.respondTrade(tradeId, 'accept');
+      if (action === 'reject')   window.respondTrade(tradeId, 'reject');
+      if (action === 'complete') window.markCompleted(tradeId);
+    });
+  });
 }
 
 window.renderMessages = renderMessages;
@@ -1895,8 +1913,7 @@ function openProposal(targetUid) {
   } else {
     offerGrid.innerHTML = myDups.map(c => {
       const holo = isHolo(c);
-      return `<div class="prop-sticker ${holo?'holo':''}" data-code="${c}" data-type="offer"
-        onclick="togglePropSticker(this,'offer')">${holo?'✨ ':''}${c}</div>`;
+      return `<div class="prop-sticker ${holo?'holo':''}" data-code="${c}" data-type="offer">${holo?'✨ ':''}${c}</div>`;
     }).join('');
   }
 
@@ -1907,13 +1924,22 @@ function openProposal(targetUid) {
   } else {
     wantGrid.innerHTML = theirDups.map(c => {
       const holo = isHolo(c);
-      return `<div class="prop-sticker ${holo?'holo':''}" data-code="${c}" data-type="want"
-        onclick="togglePropSticker(this,'want')">${holo?'✨ ':''}${c}</div>`;
+      return `<div class="prop-sticker ${holo?'holo':''}" data-code="${c}" data-type="want">${holo?'✨ ':''}${c}</div>`;
     }).join('');
   }
 
   updatePropSummary();
-  const pm = document.getElementById('proposal-modal'); pm.style.display = 'flex';
+
+  // Wire up sticker clicks via event delegation
+  document.querySelectorAll('#prop-offer-grid .prop-sticker').forEach(el => {
+    el.addEventListener('click', () => togglePropSticker(el, 'offer'));
+  });
+  document.querySelectorAll('#prop-want-grid .prop-sticker').forEach(el => {
+    el.addEventListener('click', () => togglePropSticker(el, 'want'));
+  });
+
+  const pm = document.getElementById('proposal-modal');
+  pm.style.display = 'flex';
 }
 
 function closeProposal() {
