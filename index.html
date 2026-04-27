@@ -1897,20 +1897,64 @@ if(m.type==="text"){
 div.innerHTML=m.text
 }
 
-if(m.type==="proposal"){
 div.innerHTML=`
-<div style="border:1px solid #ddd;padding:8px">
-Propuesta intercambio
-<br>
-Da: ${m.proposal.give.join(",")}
-<br>
-Recibe: ${m.proposal.want.join(",")}
-<br>
-<button onclick="acceptProposal('${doc.id}')">Aceptar</button>
-<button onclick="rejectProposal('${doc.id}')">Rechazar</button>
+<div style="
+background:white;
+border-radius:12px;
+padding:12px;
+box-shadow:0 1px 3px rgba(0,0,0,0.1);
+max-width:75%;
+">
+
+<div style="font-weight:600;margin-bottom:6px">
+🤝 Propuesta intercambio
+</div>
+
+<div style="font-size:13px;color:#555">
+Tú das:
+</div>
+
+<div style="margin-bottom:6px">
+${m.proposal.give.join(", ")}
+</div>
+
+<div style="font-size:13px;color:#555">
+Recibes:
+</div>
+
+<div style="margin-bottom:10px">
+${m.proposal.want.join(", ")}
+</div>
+
+<div style="display:flex;gap:6px">
+
+<button onclick="acceptProposal('${doc.id}')"
+style="
+background:#25D366;
+color:white;
+border:none;
+padding:6px 10px;
+border-radius:8px;
+cursor:pointer;
+">
+Aceptar
+</button>
+
+<button onclick="rejectProposal('${doc.id}')"
+style="
+background:#eee;
+border:none;
+padding:6px 10px;
+border-radius:8px;
+cursor:pointer;
+">
+Rechazar
+</button>
+
+</div>
+
 </div>
 `
-}
 
 el.appendChild(div)
 
