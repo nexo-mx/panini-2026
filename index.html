@@ -180,12 +180,13 @@ window.openChat = async (otherUid) => {
   window._openChatUid = otherUid;
   const cid = chatId(currentUser.uid, otherUid);
 
-  // Mark as read
+  // Mark as read — use chatTransaction to avoid dot-notation issues
   try {
-    await setDoc(doc(db, 'chats', cid), {
+    await chatTransaction(cid, data => ({
+      ...data,
       participants: [currentUser.uid, otherUid],
-      [`unread.${currentUser.uid}`]: 0
-    }, { merge: true });
+      unread: { ...(data.unread || {}), [currentUser.uid]: 0 }
+    }));
   } catch(e) {}
 
   // Get current data & show modal
@@ -216,12 +217,12 @@ window.sendMessage = async () => {
   const msg = { from: currentUser.uid, text, ts: Date.now() };
 
   try {
-    await setDoc(doc(db, 'chats', cid), {
+    await chatTransaction(cid, data => ({
+      ...data,
       participants: [currentUser.uid, otherUid],
-      messages: arrayUnion(msg),
-      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
-      [`unread.${currentUser.uid}`]: 0
-    }, { merge: true });
+      messages: [...(data.messages || []), msg],
+      unread: { ...(data.unread || {}), [otherUid]: ((data.unread||{})[otherUid]||0)+1, [currentUser.uid]: 0 }
+    }));
   } catch(e) { showToast('❌ Error al enviar'); }
 };
 
@@ -308,38 +309,23 @@ window.closePbModal = () => {
 
 window.submitProposal = async () => {
   if (!currentUser || !window._openChatUid) return;
-
   const offerChips = Array.from(document.querySelectorAll('[data-side="offer"].selected')).map(c => c.dataset.code);
   const wantChips  = Array.from(document.querySelectorAll('[data-side="want"].selected')).map(c => c.dataset.code);
-
   if (offerChips.length === 0) { showToast('⚠️ Selecciona al menos una estampa para ofrecer'); return; }
   if (wantChips.length === 0)  { showToast('⚠️ Selecciona al menos una estampa para pedir'); return; }
-
-  const cid      = chatId(currentUser.uid, window._openChatUid);
+  const cid = chatId(currentUser.uid, window._openChatUid);
   const otherUid = window._openChatUid;
-
-  const proposal = {
-    fromUid: currentUser.uid,
-    offeredCodes: offerChips,
-    wantedCodes: wantChips,
-    status: 'pending',
-    ts: Date.now()
-  };
-
-  const sysMsg = {
-    from: '__system__',
-    text: `📋 ${window.userProfile?.nickname || currentUser.displayName} propuso un intercambio: ofrece ${offerChips.length} estampa(s) y pide ${wantChips.length} a cambio.`,
-    ts: Date.now()
-  };
-
+  const myName = window.userProfile?.nickname || currentUser.displayName;
+  const proposal = { fromUid: currentUser.uid, offeredCodes: offerChips, wantedCodes: wantChips, status: 'pending', ts: Date.now() };
+  const sysMsg = { from: '__system__', text: `📋 ${myName} propuso un intercambio: ofrece ${offerChips.length} estampa(s) y pide ${wantChips.length} a cambio.`, ts: Date.now() };
   try {
-    await setDoc(doc(db, 'chats', cid), {
+    await chatTransaction(cid, data => ({
+      ...data,
       participants: [currentUser.uid, otherUid],
-      messages: arrayUnion(sysMsg),
       proposal,
-      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
-      [`unread.${currentUser.uid}`]: 0
-    }, { merge: true });
+      messages: [...(data.messages || []), sysMsg],
+      unread: { ...(data.unread || {}), [otherUid]: ((data.unread||{})[otherUid]||0)+1, [currentUser.uid]: 0 }
+    }));
     closePbModal();
     showToast('✅ Propuesta enviada');
   } catch(e) { console.error(e); showToast('❌ Error al enviar propuesta'); }
@@ -403,47 +389,48 @@ window.submitCounter = async () => {
   const offerChips = Array.from(document.querySelectorAll('[data-side="offer"].selected')).map(c => c.dataset.code);
   const wantChips  = Array.from(document.querySelectorAll('[data-side="want"].selected')).map(c => c.dataset.code);
   if (offerChips.length === 0 || wantChips.length === 0) { showToast('⚠️ Selecciona estampas en ambos lados'); return; }
-
   const cid = chatId(currentUser.uid, window._openChatUid);
   const otherUid = window._openChatUid;
-  const proposal = {
-    fromUid: currentUser.uid,
-    offeredCodes: offerChips,
-    wantedCodes: wantChips,
-    status: 'pending',
-    ts: Date.now()
-  };
-  const sysMsg = { from: '__system__', text: `↩️ ${window.userProfile?.nickname || currentUser.displayName} envió una contraoferta.`, ts: Date.now() };
-
+  const myName = window.userProfile?.nickname || currentUser.displayName;
+  const proposal = { fromUid: currentUser.uid, offeredCodes: offerChips, wantedCodes: wantChips, status: 'pending', ts: Date.now() };
+  const sysMsg = { from: '__system__', text: `↩️ ${myName} envió una contraoferta.`, ts: Date.now() };
   try {
-    await setDoc(doc(db, 'chats', cid), {
+    await chatTransaction(cid, data => ({
+      ...data,
       participants: [currentUser.uid, otherUid],
-      messages: arrayUnion(sysMsg),
       proposal,
-      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
-      [`unread.${currentUser.uid}`]: 0
-    }, { merge: true });
+      messages: [...(data.messages || []), sysMsg],
+      unread: { ...(data.unread || {}), [otherUid]: ((data.unread||{})[otherUid]||0)+1, [currentUser.uid]: 0 }
+    }));
     closePbModal();
     showToast('✅ Contraoferta enviada');
-  } catch(e) { showToast('❌ Error al enviar'); }
+  } catch(e) { console.error(e); showToast('❌ Error al enviar contraoferta'); }
 };
 
-// Accept proposal — updateDoc handles nested dot-notation correctly
+// ── Firestore helper: lee el doc, aplica cambios en JS, escribe todo ──
+async function chatTransaction(cid, mutateFn) {
+  const ref = doc(db, 'chats', cid);
+  const snap = await getDoc(ref);
+  const data = snap.exists() ? snap.data() : {};
+  const next = mutateFn(data);          // función pura que devuelve el doc nuevo
+  await setDoc(ref, next);              // sobreescritura total — sin dot-notation, sin arrayUnion
+}
+
+// Accept proposal
 window.acceptProposal = async () => {
   if (!currentUser || !window._openChatUid) return;
-  const cid = chatId(currentUser.uid, window._openChatUid);
+  const cid      = chatId(currentUser.uid, window._openChatUid);
   const otherUid = window._openChatUid;
-  const sysMsg = { from: '__system__', text: `✅ ¡${window.userProfile?.nickname || currentUser.displayName} aceptó el intercambio! Coordinen el encuentro. Cuando lo hayan completado, cada uno debe pulsar "Intercambio Completado".`, ts: Date.now() };
+  const myName   = window.userProfile?.nickname || currentUser.displayName;
+  const sysMsg   = { from: '__system__', text: `✅ ¡${myName} aceptó el intercambio! Coordinen el encuentro. Cuando lo hayan completado, cada uno debe pulsar "Intercambio Completado".`, ts: Date.now() };
   try {
-    const ref = doc(db, 'chats', cid);
-    // First ensure the doc exists with participants
-    await setDoc(ref, { participants: [currentUser.uid, otherUid] }, { merge: true });
-    // Then update nested fields with updateDoc (dot notation works correctly here)
-    await updateDoc(ref, {
-      'proposal.status': 'accepted',
-      messages: arrayUnion(sysMsg),
-      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
-    });
+    await chatTransaction(cid, data => ({
+      ...data,
+      participants: [currentUser.uid, otherUid],
+      proposal: { ...data.proposal, status: 'accepted' },
+      messages: [...(data.messages || []), sysMsg],
+      unread: { ...(data.unread || {}), [otherUid]: ((data.unread || {})[otherUid] || 0) + 1 }
+    }));
     showToast('🎉 ¡Intercambio aceptado!');
   } catch(e) { console.error(e); showToast('❌ Error al aceptar: ' + e.message); }
 };
@@ -452,17 +439,19 @@ window.acceptProposal = async () => {
 window.declineProposal = async () => {
   if (!currentUser || !window._openChatUid) return;
   if (!confirm('¿Rechazar esta propuesta?')) return;
-  const cid = chatId(currentUser.uid, window._openChatUid);
+  const cid      = chatId(currentUser.uid, window._openChatUid);
   const otherUid = window._openChatUid;
-  const sysMsg = { from: '__system__', text: `❌ ${window.userProfile?.nickname || currentUser.displayName} rechazó la propuesta.`, ts: Date.now() };
+  const myName   = window.userProfile?.nickname || currentUser.displayName;
+  const sysMsg   = { from: '__system__', text: `❌ ${myName} rechazó la propuesta.`, ts: Date.now() };
   try {
-    const ref = doc(db, 'chats', cid);
-    await setDoc(ref, { participants: [currentUser.uid, otherUid] }, { merge: true });
-    await updateDoc(ref, {
-      'proposal.status': 'declined',
-      messages: arrayUnion(sysMsg),
-      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
-    });
+    await chatTransaction(cid, data => ({
+      ...data,
+      participants: [currentUser.uid, otherUid],
+      proposal: { ...data.proposal, status: 'declined' },
+      messages: [...(data.messages || []), sysMsg],
+      unread: { ...(data.unread || {}), [otherUid]: ((data.unread || {})[otherUid] || 0) + 1 }
+    }));
+    showToast('❌ Propuesta rechazada');
   } catch(e) { console.error(e); showToast('❌ Error al rechazar'); }
 };
 
@@ -499,34 +488,26 @@ window.completeTradeConfirm = async () => {
   updateStats();
   await saveToCloud(newCollected);
 
-  // Mark completion for this user
-  const completedByField = `proposal.completedBy.${myUid}`;
-  const sysMsg = { from: '__system__', text: `✅ ${window.userProfile?.nickname || currentUser.displayName} marcó el intercambio como completado.`, ts: Date.now() };
+  // Mark completion for this user using chatTransaction (read-modify-write)
+  const myName = window.userProfile?.nickname || currentUser.displayName;
+  const sysMsg = { from: '__system__', text: `✅ ${myName} marcó el intercambio como completado.`, ts: Date.now() };
 
   try {
-    const snap = await getDoc(doc(db, 'chats', cid));
-    const data = snap.exists() ? snap.data() : {};
-    const completedBy = data.proposal?.completedBy || {};
-    const otherAlreadyCompleted = !!completedBy[otherUid];
-
-    const ref = doc(db, 'chats', cid);
-    await setDoc(ref, { participants: [myUid, otherUid] }, { merge: true });
-
-    if (otherAlreadyCompleted) {
-      const finalMsg2 = { from: '__system__', text: '🎉 ¡Ambos confirmaron! Intercambio completado con éxito.', ts: Date.now() + 1 };
-      await updateDoc(ref, {
-        [`proposal.completedBy.${myUid}`]: true,
-        'proposal.status': 'completed',
-        messages: arrayUnion(sysMsg, finalMsg2),
-        [`unread.${otherUid}`]: (data.unread?.[otherUid] || 0) + 1,
-      });
-    } else {
-      await updateDoc(ref, {
-        [`proposal.completedBy.${myUid}`]: true,
-        messages: arrayUnion(sysMsg),
-        [`unread.${otherUid}`]: (data.unread?.[otherUid] || 0) + 1,
-      });
-    }
+    await chatTransaction(cid, data => {
+      const completedBy = { ...(data.proposal?.completedBy || {}), [myUid]: true };
+      const otherAlreadyCompleted = !!completedBy[otherUid];
+      const newMessages = [...(data.messages || []), sysMsg];
+      if (otherAlreadyCompleted) {
+        newMessages.push({ from: '__system__', text: '🎉 ¡Ambos confirmaron! Intercambio completado con éxito.', ts: Date.now() + 1 });
+      }
+      return {
+        ...data,
+        participants: [myUid, otherUid],
+        proposal: { ...data.proposal, status: otherAlreadyCompleted ? 'completed' : data.proposal.status, completedBy },
+        messages: newMessages,
+        unread: { ...(data.unread || {}), [otherUid]: ((data.unread||{})[otherUid]||0)+1 }
+      };
+    });
     showToast('✅ ¡Listo! Tu álbum fue actualizado.');
     celebrate();
   } catch(e) { console.error(e); showToast('❌ Error al completar: ' + e.message); }
@@ -614,8 +595,7 @@ function renderChatModal(data, otherUid) {
     actionsHtml = `
       <div class="proposal-status declined">❌ Propuesta rechazada</div>
       <div class="proposal-actions" style="margin-top:8px;">
-        <button class="btn btn-outline" onclick="openCounterProposal()">↩️ Hacer Contraoferta</button>
-        <button class="btn btn-gold" onclick="openProposalBuilder()">📋 Nueva Propuesta</button>
+        <button class="btn btn-outline" style="width:100%;" onclick="closeChat()">✕ Cerrar</button>
       </div>`;
   } else if (status === 'accepted') {
     if (!myCompleted) {
@@ -643,7 +623,7 @@ function renderChatModal(data, otherUid) {
         <div class="trade-chips">${wantedHtml}</div>
       </div>
       ${actionsHtml}
-      ${status === 'completed' || status === 'declined' ? `
+      ${status === 'completed' ? `
         <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
           <button class="btn btn-gold" style="width:100%;" onclick="openProposalBuilder()">📋 Nueva Propuesta</button>
         </div>` : ''}
