@@ -30,6 +30,8 @@ const firebaseConfig = {
 const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db   = getFirestore(app);
+window._db = db;
+window._firestoreUtils = { collection, query, where, getDocs, onSnapshot, doc, getDoc, setDoc, updateDoc, arrayUnion };
 
 let currentUser = null;
 let unsubscribeUser = null;
@@ -53,6 +55,7 @@ window.logoutUser = async () => {
 onAuthStateChanged(auth, async user => {
   currentUser = user;
   if (user) {
+    window._currentUserUid = user.uid;
     showApp(user);
     subscribeToMyData(user.uid);
     subscribeToMyChats(user.uid);
@@ -158,14 +161,17 @@ function subscribeToMyChats(uid) {
       const changedDoc = snap.docs.find(d => d.id === cid);
       if (changedDoc) renderChatModal(changedDoc.data(), window._openChatUid);
     }
+    // If messages tab is visible, refresh it
+    const msgTab = document.getElementById('tab-messages');
+    if (msgTab && msgTab.style.display !== 'none') renderMessages();
   });
 }
 
 function updateNotifBadge(count) {
   const badge = document.getElementById('notif-badge');
-  if (!badge) return;
-  badge.textContent = count;
-  badge.style.display = count > 0 ? 'flex' : 'none';
+  if (badge) { badge.textContent = count; badge.style.display = count > 0 ? 'flex' : 'none'; }
+  const tabBadge = document.getElementById('tab-msg-badge');
+  if (tabBadge) { tabBadge.textContent = count; tabBadge.style.display = count > 0 ? 'inline' : 'none'; }
 }
 
 // Open a chat with another user
@@ -422,20 +428,24 @@ window.submitCounter = async () => {
   } catch(e) { showToast('❌ Error al enviar'); }
 };
 
-// Accept proposal
+// Accept proposal — updateDoc handles nested dot-notation correctly
 window.acceptProposal = async () => {
   if (!currentUser || !window._openChatUid) return;
   const cid = chatId(currentUser.uid, window._openChatUid);
   const otherUid = window._openChatUid;
-  const sysMsg = { from: '__system__', text: `✅ ¡${window.userProfile?.nickname || currentUser.displayName} aceptó el intercambio! Coordinen el encuentro por WhatsApp. Cuando lo hayan completado, cada uno debe pulsar "Intercambio completado".`, ts: Date.now() };
+  const sysMsg = { from: '__system__', text: `✅ ¡${window.userProfile?.nickname || currentUser.displayName} aceptó el intercambio! Coordinen el encuentro. Cuando lo hayan completado, cada uno debe pulsar "Intercambio Completado".`, ts: Date.now() };
   try {
-    await setDoc(doc(db, 'chats', cid), {
+    const ref = doc(db, 'chats', cid);
+    // First ensure the doc exists with participants
+    await setDoc(ref, { participants: [currentUser.uid, otherUid] }, { merge: true });
+    // Then update nested fields with updateDoc (dot notation works correctly here)
+    await updateDoc(ref, {
       'proposal.status': 'accepted',
       messages: arrayUnion(sysMsg),
       [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
-    }, { merge: true });
+    });
     showToast('🎉 ¡Intercambio aceptado!');
-  } catch(e) { showToast('❌ Error'); }
+  } catch(e) { console.error(e); showToast('❌ Error al aceptar: ' + e.message); }
 };
 
 // Decline proposal
@@ -446,12 +456,14 @@ window.declineProposal = async () => {
   const otherUid = window._openChatUid;
   const sysMsg = { from: '__system__', text: `❌ ${window.userProfile?.nickname || currentUser.displayName} rechazó la propuesta.`, ts: Date.now() };
   try {
-    await setDoc(doc(db, 'chats', cid), {
+    const ref = doc(db, 'chats', cid);
+    await setDoc(ref, { participants: [currentUser.uid, otherUid] }, { merge: true });
+    await updateDoc(ref, {
       'proposal.status': 'declined',
       messages: arrayUnion(sysMsg),
       [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
-    }, { merge: true });
-  } catch(e) { showToast('❌ Error'); }
+    });
+  } catch(e) { console.error(e); showToast('❌ Error al rechazar'); }
 };
 
 // Mark trade as completed — update stickers
@@ -495,22 +507,29 @@ window.completeTradeConfirm = async () => {
     const snap = await getDoc(doc(db, 'chats', cid));
     const data = snap.exists() ? snap.data() : {};
     const completedBy = data.proposal?.completedBy || {};
-    completedBy[myUid] = true;
+    const otherAlreadyCompleted = !!completedBy[otherUid];
 
-    const bothCompleted = completedBy[currentUser.uid] && completedBy[otherUid];
-    const update = {
-      [`proposal.completedBy.${myUid}`]: true,
-      messages: arrayUnion(sysMsg),
-      [`unread.${otherUid}`]: (data.unread?.[otherUid] || 0) + 1,
-    };
-    if (bothCompleted || completedBy[otherUid]) {
-      update['proposal.status'] = 'completed';
-      update.messages = arrayUnion(sysMsg, { from: '__system__', text: '🎉 ¡Ambos confirmaron! Intercambio completado con éxito.', ts: Date.now() + 1 });
+    const ref = doc(db, 'chats', cid);
+    await setDoc(ref, { participants: [myUid, otherUid] }, { merge: true });
+
+    if (otherAlreadyCompleted) {
+      const finalMsg2 = { from: '__system__', text: '🎉 ¡Ambos confirmaron! Intercambio completado con éxito.', ts: Date.now() + 1 };
+      await updateDoc(ref, {
+        [`proposal.completedBy.${myUid}`]: true,
+        'proposal.status': 'completed',
+        messages: arrayUnion(sysMsg, finalMsg2),
+        [`unread.${otherUid}`]: (data.unread?.[otherUid] || 0) + 1,
+      });
+    } else {
+      await updateDoc(ref, {
+        [`proposal.completedBy.${myUid}`]: true,
+        messages: arrayUnion(sysMsg),
+        [`unread.${otherUid}`]: (data.unread?.[otherUid] || 0) + 1,
+      });
     }
-    await setDoc(doc(db, 'chats', cid), update, { merge: true });
     showToast('✅ ¡Listo! Tu álbum fue actualizado.');
     celebrate();
-  } catch(e) { console.error(e); showToast('❌ Error al completar'); }
+  } catch(e) { console.error(e); showToast('❌ Error al completar: ' + e.message); }
 };
 
 // Render the chat modal content
@@ -1285,7 +1304,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
       </div>
       <div class="user-area">
         <!-- Notification bell -->
-        <button class="notif-btn" onclick="switchTab('trades', document.querySelectorAll('.tab')[1])" title="Intercambios y mensajes">
+        <button class="notif-btn" onclick="switchTab('messages', document.getElementById('tab-btn-messages'))" title="Intercambios y mensajes">
           💬
           <div id="notif-badge">0</div>
         </button>
@@ -1304,6 +1323,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   <div class="tabs">
     <button class="tab active" onclick="switchTab('album', this)">📖 Mi Álbum</button>
     <button class="tab" onclick="switchTab('trades', this)">🔄 Intercambios</button>
+    <button class="tab" id="tab-btn-messages" onclick="switchTab('messages', this)">💬 Mensajes<span id="tab-msg-badge" style="display:none;background:var(--red);color:white;font-family:'Bebas Neue',sans-serif;font-size:11px;padding:1px 6px;border-radius:10px;margin-left:5px;"></span></button>
   </div>
 
   <!-- ── TAB: ÁLBUM ─────────────────────────────────────────── -->
@@ -1378,6 +1398,17 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
       </div>
     </div>
     <div id="trades-content"><p style="color:#555;text-align:center;padding:40px">Cargando usuarios...</p></div>
+  </div>
+
+  <!-- ── TAB: MENSAJES ─────────────────────────────────────────── -->
+  <div id="tab-messages" class="main" style="display:none;padding-top:16px;">
+    <div class="trades-header">
+      <h2>💬 Mensajes</h2>
+      <p>Tus conversaciones de intercambio. Pulsa en cualquier chat para abrirlo.</p>
+    </div>
+    <div id="messages-content">
+      <p style="color:#555;text-align:center;padding:40px;">Cargando conversaciones…</p>
+    </div>
   </div>
 
   <!-- ══ ONBOARDING MODAL ══════════════════════════════════════ -->
@@ -1971,12 +2002,90 @@ function toggleUtc(id) {
 function switchTab(tab, btn) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('tab-album').style.display  = tab === 'album'  ? 'block' : 'none';
-  document.getElementById('tab-trades').style.display = tab === 'trades' ? 'block' : 'none';
-  if (tab === 'trades') {
-    window.loadAllUsersData().then(window.renderTrades);
+  document.getElementById('tab-album').style.display    = tab === 'album'    ? 'block' : 'none';
+  document.getElementById('tab-trades').style.display   = tab === 'trades'   ? 'block' : 'none';
+  document.getElementById('tab-messages').style.display = tab === 'messages' ? 'block' : 'none';
+  if (tab === 'trades')   window.loadAllUsersData().then(window.renderTrades);
+  if (tab === 'messages') renderMessages();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER MESSAGES TAB
+// ═══════════════════════════════════════════════════════════════
+async function renderMessages() {
+  const container = document.getElementById('messages-content');
+  if (!container || !window._currentUserUid) return;
+  container.innerHTML = '<p style="color:#555;text-align:center;padding:30px;">Cargando…</p>';
+
+  if (!window._db || !window._firestoreUtils) { container.innerHTML = '<p style="color:#555;text-align:center;padding:30px;">Error de conexión</p>'; return; }
+
+  const { collection, query, where, getDocs } = window._firestoreUtils;
+  try {
+    const q = query(collection(window._db, 'chats'), where('participants', 'array-contains', window._currentUserUid));
+    const snap = await getDocs(q);
+
+    if (snap.empty) {
+      container.innerHTML = `<div class="no-trades"><h3>Sin mensajes aún</h3><p style="color:#555;font-size:13px">Ve a Intercambios y pulsa 💬 Mensaje en algún usuario para iniciar una conversación.</p></div>`;
+      return;
+    }
+
+    // Sort by most recent message
+    const chats = [];
+    snap.forEach(d => chats.push({ id: d.id, ...d.data() }));
+    chats.sort((a, b) => {
+      const aTs = (a.messages || []).at(-1)?.ts || 0;
+      const bTs = (b.messages || []).at(-1)?.ts || 0;
+      return bTs - aTs;
+    });
+
+    let html = '';
+    for (const chat of chats) {
+      const otherUid = chat.participants.find(p => p !== window._currentUserUid);
+      if (!otherUid) continue;
+      const otherData = window.allUsersData[otherUid] || {};
+      const otherName = otherData.profile?.nickname || otherData.displayName || 'Usuario';
+      const otherPhoto = otherData.photoURL;
+      const unread = chat.unread?.[window._currentUserUid] || 0;
+      const lastMsg = (chat.messages || []).at(-1);
+      const lastText = lastMsg ? (lastMsg.from === '__system__' ? `<em>${lastMsg.text.slice(0,60)}…</em>` : lastMsg.text.slice(0,60)) : 'Sin mensajes';
+      const lastTime = lastMsg ? new Date(lastMsg.ts).toLocaleString('es-MX', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
+
+      const proposalStatus = chat.proposal?.status;
+      let statusBadge = '';
+      if (proposalStatus === 'pending')  statusBadge = '<span style="background:rgba(160,96,240,0.2);color:var(--nexo);border:1px solid rgba(160,96,240,0.4);font-family:Bebas Neue,sans-serif;font-size:11px;padding:2px 8px;border-radius:10px;letter-spacing:1px;">⏳ PROPUESTA PENDIENTE</span>';
+      if (proposalStatus === 'accepted') statusBadge = '<span style="background:rgba(48,192,96,0.15);color:var(--green);border:1px solid rgba(48,192,96,0.4);font-family:Bebas Neue,sans-serif;font-size:11px;padding:2px 8px;border-radius:10px;letter-spacing:1px;">✅ ACEPTADA — PENDIENTE REUNIÓN</span>';
+      if (proposalStatus === 'completed')statusBadge = '<span style="background:rgba(48,192,96,0.1);color:#30c060;border:1px solid rgba(48,192,96,0.2);font-family:Bebas Neue,sans-serif;font-size:11px;padding:2px 8px;border-radius:10px;letter-spacing:1px;">🎉 COMPLETADO</span>';
+      if (proposalStatus === 'declined') statusBadge = '<span style="background:rgba(224,48,48,0.1);color:var(--red);border:1px solid rgba(224,48,48,0.3);font-family:Bebas Neue,sans-serif;font-size:11px;padding:2px 8px;border-radius:10px;letter-spacing:1px;">❌ RECHAZADA</span>';
+
+      html += `
+      <div class="user-trades-card" style="cursor:pointer;" onclick="openChat('${otherUid}')">
+        <div class="utc-header" style="border-bottom:none;">
+          <div class="utc-avatar" style="${unread > 0 ? 'border-color:var(--nexo);box-shadow:0 0 8px rgba(160,96,240,0.4)' : ''}">
+            ${otherPhoto ? `<img src="${otherPhoto}" alt="">` : '👤'}
+          </div>
+          <div class="utc-info">
+            <div class="utc-name" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              ${otherName}
+              ${statusBadge}
+            </div>
+            <div class="utc-summary" style="margin-top:4px;font-size:12px;color:#555;">${lastText}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+            ${unread > 0 ? `<div style="background:var(--red);color:white;font-family:'Bebas Neue',sans-serif;font-size:12px;min-width:22px;height:22px;border-radius:11px;display:flex;align-items:center;justify-content:center;padding:0 5px;">${unread}</div>` : ''}
+            <div style="font-size:10px;color:#444;font-family:'Barlow Condensed',sans-serif;">${lastTime}</div>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    container.innerHTML = html || `<div class="no-trades"><h3>Sin mensajes aún</h3></div>`;
+  } catch(e) {
+    console.error(e);
+    container.innerHTML = `<div class="no-trades"><h3>Error al cargar</h3><p style="color:#555;font-size:12px;">${e.message}</p></div>`;
   }
 }
+
+window.renderMessages = renderMessages;
 
 // ═══════════════════════════════════════════════════════════════
 // PDF EXPORT
