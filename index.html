@@ -227,22 +227,34 @@ window.sendMessage = async () => {
 };
 
 // Open the proposal builder
-window.openProposalBuilder = () => {
+window.openProposalBuilder = async () => {
   if (!currentUser || !window._openChatUid) return;
   const otherUid = window._openChatUid;
-  const otherData = window.allUsersData[otherUid] || {};
-  const otherStickers = otherData.stickers || {};
 
-  // My duplicates (what I can offer)
+  // Siempre recargar datos frescos del otro usuario directo de Firestore
+  let otherStickers = {};
+  try {
+    const snap = await getDoc(doc(db, 'users', otherUid));
+    if (snap.exists()) {
+      window.allUsersData[otherUid] = { ...snap.data(), uid: otherUid };
+      otherStickers = snap.data().stickers || {};
+    }
+  } catch(e) {
+    otherStickers = window.allUsersData[otherUid]?.stickers || {};
+  }
+  const otherData = window.allUsersData[otherUid] || {};
+
+  // Yo ofrezco: mis repetidas que al otro le faltan (compatibles)
   const myDups = [];
   for (const sec of SECTIONS) {
     for (const st of sec.stickers) {
-      const n = getCount(st.code);
-      if (n > 1) myDups.push(st.code);
+      const myN = getCount(st.code);
+      const theirN = otherStickers[st.code] || 0;
+      if (myN > 1 && theirN === 0) myDups.push(st.code);
     }
   }
 
-  // What I'm missing that the other has duplicates of
+  // Yo pido: sus repetidas que a mí me faltan (compatibles)
   const theyCanGive = [];
   for (const sec of SECTIONS) {
     for (const st of sec.stickers) {
@@ -257,12 +269,12 @@ window.openProposalBuilder = () => {
   let html = `
   <div class="proposal-builder">
     <div class="pb-title">📋 Proponer Intercambio</div>
-    <p class="pb-sub">Selecciona qué quieres pedir y qué ofreces a cambio.</p>
+    <p class="pb-sub">Solo se muestran estampas compatibles: lo que ofreces le falta al otro, y lo que pides te falta a ti.</p>
 
     <div class="pb-section">
-      <div class="pb-label give">✅ Yo ofrezco (mis repetidas) <span class="pb-count" id="pb-offer-count">0 selec.</span></div>
+      <div class="pb-label give">✅ Yo ofrezco (mis repetidas que a ${otherName} le faltan) <span class="pb-count" id="pb-offer-count">0 selec.</span></div>
       ${myDups.length === 0
-        ? '<p class="pb-empty">No tienes repetidas para ofrecer aún.</p>'
+        ? `<p class="pb-empty">No tienes repetidas que le falten a ${otherName}.</p>`
         : `<div class="pb-chips" id="pb-offer-chips">
           ${myDups.map(code => `
             <div class="pb-chip" data-code="${code}" data-side="offer" onclick="togglePbChip(this,'offer')">
@@ -273,9 +285,9 @@ window.openProposalBuilder = () => {
     </div>
 
     <div class="pb-section">
-      <div class="pb-label want">🔵 Yo pido (sus repetidas que me faltan) <span class="pb-count" id="pb-want-count">0 selec.</span></div>
+      <div class="pb-label want">🔵 Yo pido (sus repetidas que a mí me faltan) <span class="pb-count" id="pb-want-count">0 selec.</span></div>
       ${theyCanGive.length === 0
-        ? `<p class="pb-empty">${otherName} no tiene repetidas de lo que te falta (o sus datos no están actualizados).</p>`
+        ? `<p class="pb-empty">${otherName} no tiene repetidas de lo que te falta.</p>`
         : `<div class="pb-chips" id="pb-want-chips">
           ${theyCanGive.map(code => `
             <div class="pb-chip" data-code="${code}" data-side="want" onclick="togglePbChip(this,'want')">
@@ -332,16 +344,29 @@ window.submitProposal = async () => {
 };
 
 // Counter-proposal: recipient selects their own offer/want
-window.openCounterProposal = () => {
+window.openCounterProposal = async () => {
   if (!currentUser || !window._openChatUid) return;
   const otherUid  = window._openChatUid;
+
+  // Recargar datos frescos
+  let otherStickers = {};
+  try {
+    const snap = await getDoc(doc(db, 'users', otherUid));
+    if (snap.exists()) {
+      window.allUsersData[otherUid] = { ...snap.data(), uid: otherUid };
+      otherStickers = snap.data().stickers || {};
+    }
+  } catch(e) {
+    otherStickers = window.allUsersData[otherUid]?.stickers || {};
+  }
   const otherData = window.allUsersData[otherUid] || {};
-  const otherStickers = otherData.stickers || {};
 
   const myDups = [];
   for (const sec of SECTIONS) {
     for (const st of sec.stickers) {
-      if (getCount(st.code) > 1) myDups.push(st.code);
+      const myN = getCount(st.code);
+      const theirN = otherStickers[st.code] || 0;
+      if (myN > 1 && theirN === 0) myDups.push(st.code);
     }
   }
   const theyCanGive = [];
