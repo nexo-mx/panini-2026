@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexo — Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, getDocs, doc, getDoc }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const ADMIN_UID = 'Q0Hz0gZzftZLQnwcmFQKp2Cy0hq2';
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyBjEPXyVt7ABkJk8fm9EUEoMyMqSRG_oIU",
+  authDomain:        "panini-2026-41b58.firebaseapp.com",
+  projectId:         "panini-2026-41b58",
+  storageBucket:     "panini-2026-41b58.firebasestorage.app",
+  messagingSenderId: "594186262464",
+  appId:             "1:594186262464:web:0304fd3302ca6f7a6e5a25"
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// ── AUTH ──────────────────────────────────────────────────────
+window.loginGoogle = async () => {
+  try {
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
+  } catch(e) { showStatus('Error al iniciar sesión'); }
+};
+
+window.logoutAdmin = async () => {
+  await signOut(auth);
+};
+
+onAuthStateChanged(auth, async user => {
+  if (!user) { showLogin(); return; }
+  if (user.uid !== ADMIN_UID) {
+    showBlocked();
+    setTimeout(() => signOut(auth), 3000);
+    return;
+  }
+  document.getElementById('admin-name').textContent = user.displayName || user.email;
+  if (user.photoURL) {
+    const img = document.getElementById('admin-photo');
+    img.src = user.photoURL;
+    img.style.display = 'block';
+  }
+  showDashboard();
+  await loadData();
+});
+
+// ── DATA LOADING ──────────────────────────────────────────────
+function makeTeamStickers(code) {
+  const s = [];
+  for (let i = 1; i <= 20; i++) s.push(`${code} ${i}`);
+  return s;
+}
+const INTRO_CODES = ['00 1', ...Array.from({length:19},(_,i)=>`FWC ${i+1}`)];
+const CC_CODES    = Array.from({length:14},(_,i)=>`CC ${i+1}`);
+const TEAMS = [
+  {code:'MEX',name:'México',flag:'🇲🇽'},
+  {code:'RSA',name:'Sudáfrica',flag:'🇿🇦'},
+  {code:'KOR',name:'Corea del Sur',flag:'🇰🇷'},
+  {code:'CZE',name:'Chequia',flag:'🇨🇿'},
+  {code:'CAN',name:'Canadá',flag:'🇨🇦'},
+  {code:'BIH',name:'Bosnia y Herz.',flag:'🇧🇦'},
+  {code:'QAT',name:'Qatar',flag:'🇶🇦'},
+  {code:'SUI',name:'Suiza',flag:'🇨🇭'},
+  {code:'BRA',name:'Brasil',flag:'🇧🇷'},
+  {code:'MAR',name:'Marruecos',flag:'🇲🇦'},
+  {code:'HAI',name:'Haití',flag:'🇭🇹'},
+  {code:'SCO',name:'Escocia',flag:'🏴󠁧󠁢󠁳󠁣󠁴󠁿'},
+  {code:'USA',name:'Estados Unidos',flag:'🇺🇸'},
+  {code:'PAR',name:'Paraguay',flag:'🇵🇾'},
+  {code:'AUS',name:'Australia',flag:'🇦🇺'},
+  {code:'TUR',name:'Turquía',flag:'🇹🇷'},
+  {code:'GER',name:'Alemania',flag:'🇩🇪'},
+  {code:'CUW',name:'Curazao',flag:'🇨🇼'},
+  {code:'CIV',name:'Costa de Marfil',flag:'🇨🇮'},
+  {code:'ECU',name:'Ecuador',flag:'🇪🇨'},
+  {code:'NED',name:'Países Bajos',flag:'🇳🇱'},
+  {code:'JPN',name:'Japón',flag:'🇯🇵'},
+  {code:'SWE',name:'Suecia',flag:'🇸🇪'},
+  {code:'TUN',name:'Túnez',flag:'🇹🇳'},
+  {code:'BEL',name:'Bélgica',flag:'🇧🇪'},
+  {code:'EGY',name:'Egipto',flag:'🇪🇬'},
+  {code:'IRN',name:'Irán',flag:'🇮🇷'},
+  {code:'NZL',name:'Nueva Zelanda',flag:'🇳🇿'},
+  {code:'ESP',name:'España',flag:'🇪🇸'},
+  {code:'CPV',name:'Cabo Verde',flag:'🇨🇻'},
+  {code:'KSA',name:'Arabia Saudita',flag:'🇸🇦'},
+  {code:'URU',name:'Uruguay',flag:'🇺🇾'},
+  {code:'FRA',name:'Francia',flag:'🇫🇷'},
+  {code:'SEN',name:'Senegal',flag:'🇸🇳'},
+  {code:'IRQ',name:'Irak',flag:'🇮🇶'},
+  {code:'NOR',name:'Noruega',flag:'🇳🇴'},
+  {code:'ARG',name:'Argentina',flag:'🇦🇷'},
+  {code:'ALG',name:'Argelia',flag:'🇩🇿'},
+  {code:'AUT',name:'Austria',flag:'🇦🇹'},
+  {code:'JOR',name:'Jordania',flag:'🇯🇴'},
+  {code:'POR',name:'Portugal',flag:'🇵🇹'},
+  {code:'COD',name:'RD Congo',flag:'🇨🇩'},
+  {code:'UZB',name:'Uzbekistán',flag:'🇺🇿'},
+  {code:'COL',name:'Colombia',flag:'🇨🇴'},
+  {code:'ENG',name:'Inglaterra',flag:'🏴󠁧󠁢󠁥󠁮󠁧󠁿'},
+  {code:'CRO',name:'Croacia',flag:'🇭🇷'},
+  {code:'GHA',name:'Ghana',flag:'🇬🇭'},
+  {code:'PAN',name:'Panamá',flag:'🇵🇦'},
+];
+const ALL_CODES = [...INTRO_CODES, ...CC_CODES, ...TEAMS.flatMap(t => makeTeamStickers(t.code))];
+const TOTAL = ALL_CODES.length;
+
+async function loadData() {
+  showStatus('Cargando usuarios…');
+  try {
+    // Load users
+    const usersSnap = await getDocs(collection(db, 'users'));
+    const users = [];
+    usersSnap.forEach(d => users.push({ uid: d.id, ...d.data() }));
+
+    // Load chats
+    const chatsSnap = await getDocs(collection(db, 'chats'));
+    const chats = [];
+    chatsSnap.forEach(d => chats.push({ id: d.id, ...d.data() }));
+
+    renderDashboard(users, chats);
+    showStatus('');
+  } catch(e) {
+    showStatus('Error: ' + e.message);
+  }
+}
+
+window.refresh = loadData;
+
+function renderDashboard(users, chats) {
+  const now = Date.now();
+  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+  // ── GLOBAL STATS ──
+  const totalUsers = users.length;
+  const usersWithProfile = users.filter(u => u.profile?.nickname).length;
+  const recentUsers = users.filter(u => u.updatedAt > weekAgo).length;
+
+  // Sticker stats across all users
+  let totalGot = 0, totalDups = 0, totalMissing = 0;
+  const codeCount = {}; // how many users have each sticker (at least 1)
+  const codeDups  = {}; // total duplicates per code across all users
+  ALL_CODES.forEach(c => { codeCount[c] = 0; codeDups[c] = 0; });
+
+  users.forEach(u => {
+    const s = u.stickers || {};
+    ALL_CODES.forEach(code => {
+      const n = s[code] || 0;
+      if (n >= 1) { totalGot++; codeCount[code]++; }
+      if (n > 1)  { totalDups += (n-1); codeDups[code] += (n-1); }
+      if (n === 0) totalMissing++;
+    });
+  });
+
+  const avgProgress = totalUsers > 0
+    ? (users.reduce((s, u) => {
+        const stk = u.stickers || {};
+        const got = ALL_CODES.filter(c => (stk[c] || 0) >= 1).length;
+        return s + got / TOTAL * 100;
+      }, 0) / totalUsers).toFixed(1)
+    : 0;
+
+  // Chat stats
+  const totalChats = chats.length;
+  let totalMessages = 0, totalProposals = 0, accepted = 0, completed = 0, declined = 0, pending = 0;
+  chats.forEach(c => {
+    totalMessages += (c.messages || []).filter(m => m.from !== '__system__').length;
+    if (c.proposal) {
+      totalProposals++;
+      if (c.proposal.status === 'accepted')  accepted++;
+      if (c.proposal.status === 'completed') completed++;
+      if (c.proposal.status === 'declined')  declined++;
+      if (c.proposal.status === 'pending')   pending++;
+    }
+  });
+
+  // Most wanted (many users missing it)
+  const mostMissed = ALL_CODES
+    .map(c => ({ code: c, missing: totalUsers - codeCount[c] }))
+    .sort((a,b) => b.missing - a.missing)
+    .slice(0, 10);
+
+  // Most duplicated
+  const mostDuped = ALL_CODES
+    .map(c => ({ code: c, dups: codeDups[c] }))
+    .filter(x => x.dups > 0)
+    .sort((a,b) => b.dups - a.dups)
+    .slice(0, 10);
+
+  // Team completion rates
+  const teamStats = TEAMS.map(t => {
+    const codes = makeTeamStickers(t.code);
+    const owned = codes.reduce((s,c) => s + codeCount[c], 0);
+    const maxPossible = codes.length * totalUsers;
+    const pct = maxPossible > 0 ? (owned / maxPossible * 100).toFixed(1) : 0;
+    const complete = users.filter(u => {
+      const s = u.stickers || {};
+      return codes.every(c => (s[c] || 0) >= 1);
+    }).length;
+    return { ...t, pct: parseFloat(pct), complete };
+  }).sort((a,b) => b.pct - a.pct);
+
+  // Per-user table
+  const userRows = users.map(u => {
+    const s = u.stickers || {};
+    const got  = ALL_CODES.filter(c => (s[c]||0) >= 1).length;
+    const dups = ALL_CODES.reduce((a,c) => a + Math.max(0,(s[c]||0)-1), 0);
+    const pct  = (got / TOTAL * 100).toFixed(1);
+    const name = u.profile?.nickname || u.displayName || u.email || u.uid.slice(0,8);
+    const city = u.profile?.city || '—';
+    const mode = u.profile?.mode || '—';
+    const active = u.updatedAt > weekAgo;
+    return { uid: u.uid, name, city, mode, got, dups, pct, active, photo: u.photoURL };
+  }).sort((a,b) => b.got - a.got);
+
+  // ── RENDER ──
+  document.getElementById('stat-users').textContent    = totalUsers;
+  document.getElementById('stat-active').textContent   = recentUsers;
+  document.getElementById('stat-profiles').textContent = usersWithProfile;
+  document.getElementById('stat-avg').textContent      = avgProgress + '%';
+  document.getElementById('stat-chats').textContent    = totalChats;
+  document.getElementById('stat-messages').textContent = totalMessages;
+  document.getElementById('stat-proposals').textContent= totalProposals;
+  document.getElementById('stat-completed').textContent= completed;
+
+  // Trade funnel
+  document.getElementById('funnel-pending').textContent  = pending;
+  document.getElementById('funnel-accepted').textContent = accepted;
+  document.getElementById('funnel-completed').textContent= completed;
+  document.getElementById('funnel-declined').textContent = declined;
+  const fMax = Math.max(pending, accepted, completed, declined, 1);
+  ['pending','accepted','completed','declined'].forEach(k => {
+    const v = parseInt(document.getElementById(`funnel-${k}`).textContent);
+    document.getElementById(`fbar-${k}`).style.width = (v/fMax*100) + '%';
+  });
+
+  // Most missed
+  const mmEl = document.getElementById('most-missed');
+  mmEl.innerHTML = mostMissed.map(({code,missing}) => `
+    <div class="rank-row">
+      <span class="rank-code">${code}</span>
+      <div class="rank-bar-wrap"><div class="rank-bar missed" style="width:${(missing/totalUsers*100).toFixed(0)}%"></div></div>
+      <span class="rank-val">${missing}/${totalUsers}</span>
+    </div>`).join('');
+
+  // Most duped
+  const mdEl = document.getElementById('most-duped');
+  const maxDup = mostDuped[0]?.dups || 1;
+  mdEl.innerHTML = mostDuped.map(({code,dups}) => `
+    <div class="rank-row">
+      <span class="rank-code">${code}</span>
+      <div class="rank-bar-wrap"><div class="rank-bar duped" style="width:${(dups/maxDup*100).toFixed(0)}%"></div></div>
+      <span class="rank-val">${dups}</span>
+    </div>`).join('');
+
+  // Team completion
+  const tcEl = document.getElementById('team-completion');
+  tcEl.innerHTML = teamStats.map(t => `
+    <div class="team-row">
+      <span class="team-flag">${t.flag}</span>
+      <span class="team-name">${t.name}</span>
+      <div class="rank-bar-wrap" style="flex:1">
+        <div class="rank-bar team" style="width:${t.pct}%;background:${t.pct>66?'var(--green)':t.pct>33?'var(--gold)':'var(--red)'}"></div>
+      </div>
+      <span class="rank-val">${t.pct}%</span>
+      <span class="team-complete">${t.complete > 0 ? `${t.complete} completo${t.complete>1?'s':''}` : ''}</span>
+    </div>`).join('');
+
+  // Users table
+  const utEl = document.getElementById('users-table-body');
+  utEl.innerHTML = userRows.map((u,i) => `
+    <tr>
+      <td><span style="color:#555;font-family:'DM Mono',monospace;font-size:11px;">${i+1}</span></td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="width:28px;height:28px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;">
+            ${u.photo ? `<img src="${u.photo}" style="width:100%;height:100%;object-fit:cover;">` : '👤'}
+          </div>
+          <div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:14px;">${u.name}</div>
+            <div style="font-size:11px;color:#555;">${u.city}</div>
+          </div>
+        </div>
+      </td>
+      <td><span class="mode-pill ${u.mode==='both'?'both':'swap'}">${u.mode==='both'?'💰 Compra/venta':'🔄 Cambios'}</span></td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="flex:1;height:4px;background:var(--border);border-radius:2px;min-width:60px;">
+            <div style="height:100%;background:${parseFloat(u.pct)>66?'var(--green)':parseFloat(u.pct)>33?'var(--gold)':'var(--red)'};border-radius:2px;width:${u.pct}%"></div>
+          </div>
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:16px;color:var(--gold);min-width:36px;">${u.pct}%</span>
+        </div>
+      </td>
+      <td style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--green);">${u.got}</td>
+      <td style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--orange);">${u.dups}</td>
+      <td><span style="width:8px;height:8px;border-radius:50%;background:${u.active?'var(--green)':'#333'};display:inline-block;"></span></td>
+    </tr>`).join('');
+
+  document.getElementById('last-updated').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+}
+
+function showLogin() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('blocked-screen').style.display = 'none';
+}
+function showDashboard() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  document.getElementById('blocked-screen').style.display = 'none';
+}
+function showBlocked() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('blocked-screen').style.display = 'flex';
+}
+function showStatus(msg) {
+  const el = document.getElementById('status-bar');
+  el.textContent = msg;
+  el.style.display = msg ? 'block' : 'none';
+}
+</script>
+
+<style>
+:root {
+  --bg: #080810;
+  --surface: #0f0f1a;
+  --surface2: #161622;
+  --border: #22223a;
+  --gold: #a060f0;
+  --gold2: #7030c0;
+  --red: #e04040;
+  --green: #30c060;
+  --blue: #3080e8;
+  --orange: #ff6030;
+  --text: #e8e8f4;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:'Barlow',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+
+/* LOGIN */
+#login-screen {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height:100vh; gap:20px;
+}
+.login-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  padding:40px; text-align:center; max-width:340px; width:90%;
+}
+.login-card .logo { font-family:'Bebas Neue',sans-serif; font-size:32px; letter-spacing:8px; color:white; }
+.login-card .sub  { font-family:'DM Mono',monospace; font-size:11px; color:#444; margin:6px 0 28px; letter-spacing:2px; text-transform:uppercase; }
+.btn-google {
+  display:flex; align-items:center; justify-content:center; gap:10px; width:100%;
+  padding:12px; background:white; color:#333; border:none; border-radius:8px;
+  font-family:'Barlow Condensed',sans-serif; font-size:14px; font-weight:600; letter-spacing:1px;
+  cursor:pointer; transition:all 0.2s;
+}
+.btn-google:hover { transform:translateY(-1px); box-shadow:0 6px 20px rgba(0,0,0,0.4); }
+.google-logo { width:18px; height:18px; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill='%23EA4335' d='M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z'/%3E%3Cpath fill='%234285F4' d='M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z'/%3E%3Cpath fill='%23FBBC05' d='M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z'/%3E%3Cpath fill='%2334A853' d='M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z'/%3E%3C/svg%3E") center/contain no-repeat; }
+
+/* BLOCKED */
+#blocked-screen {
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+  min-height:100vh; gap:12px; text-align:center;
+}
+#blocked-screen h2 { font-family:'Bebas Neue',sans-serif; font-size:28px; letter-spacing:4px; color:var(--red); }
+#blocked-screen p  { color:#555; font-size:13px; }
+
+/* STATUS BAR */
+#status-bar {
+  display:none; position:fixed; top:0; left:0; right:0; z-index:999;
+  background:rgba(160,96,240,0.15); border-bottom:1px solid rgba(160,96,240,0.3);
+  padding:8px 20px; font-family:'DM Mono',monospace; font-size:12px; color:var(--gold);
+  text-align:center;
+}
+
+/* DASHBOARD */
+#dashboard { display:none; }
+.admin-header {
+  background:linear-gradient(135deg,#060610 0%,#0d0a18 60%,#080610 100%);
+  border-bottom:1px solid var(--border); padding:14px 28px;
+  display:flex; align-items:center; gap:16px; position:sticky; top:0; z-index:100;
+}
+.admin-logo { font-family:'Bebas Neue',sans-serif; font-size:20px; letter-spacing:6px; color:white; }
+.admin-badge {
+  font-family:'DM Mono',monospace; font-size:10px; letter-spacing:2px; text-transform:uppercase;
+  padding:3px 10px; background:rgba(160,96,240,0.15); border:1px solid rgba(160,96,240,0.4);
+  border-radius:4px; color:var(--gold);
+}
+.admin-user { display:flex; align-items:center; gap:8px; margin-left:auto; }
+#admin-photo { width:28px; height:28px; border-radius:50%; border:2px solid var(--gold2); object-fit:cover; display:none; }
+#admin-name  { font-family:'DM Mono',monospace; font-size:11px; color:#666; }
+.btn-refresh, .btn-logout {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600; letter-spacing:2px;
+  text-transform:uppercase; padding:6px 12px; border-radius:4px; cursor:pointer; transition:all 0.2s; border:none;
+}
+.btn-refresh { background:transparent; color:var(--gold); border:1px solid rgba(160,96,240,0.3); }
+.btn-refresh:hover { background:rgba(160,96,240,0.1); }
+.btn-logout  { background:transparent; color:#555; border:1px solid var(--border); }
+.btn-logout:hover  { color:var(--red); border-color:rgba(224,64,64,0.4); }
+#last-updated { font-family:'DM Mono',monospace; font-size:10px; color:#333; margin-left:4px; }
+
+.content { max-width:1400px; margin:0 auto; padding:24px 28px 60px; }
+
+/* SECTION HEADER */
+.section-hdr {
+  font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:4px; color:var(--gold);
+  margin:32px 0 14px; padding-bottom:8px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+}
+.section-hdr span { font-family:'DM Mono',monospace; color:#333; font-size:10px; letter-spacing:2px; }
+
+/* STAT CARDS */
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; }
+.stat-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:18px 20px; position:relative; overflow:hidden;
+}
+.stat-card::before {
+  content:''; position:absolute; top:0; left:0; right:0; height:2px;
+  background:linear-gradient(90deg,var(--color1,var(--gold2)),var(--color2,var(--gold)));
+}
+.stat-card .sc-val  { font-family:'Bebas Neue',sans-serif; font-size:36px; line-height:1; color:var(--sc-color,var(--gold)); }
+.stat-card .sc-label{ font-family:'DM Mono',monospace; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#444; margin-top:6px; }
+.stat-card .sc-icon  { position:absolute; right:16px; top:50%; transform:translateY(-50%); font-size:28px; opacity:0.15; }
+
+/* TWO-COL GRID */
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media(max-width:800px){ .two-col { grid-template-columns:1fr; } }
+
+/* PANEL */
+.panel {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:20px;
+}
+.panel-title {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700;
+  letter-spacing:3px; text-transform:uppercase; color:#555; margin-bottom:14px;
+}
+
+/* RANK ROWS */
+.rank-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.rank-code { font-family:'DM Mono',monospace; font-size:11px; color:#888; min-width:60px; }
+.rank-bar-wrap { flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+.rank-bar { height:100%; border-radius:3px; transition:width 0.6s; }
+.rank-bar.missed { background:linear-gradient(90deg,var(--red),#ff6060); }
+.rank-bar.duped  { background:linear-gradient(90deg,var(--orange),#ffb060); }
+.rank-bar.team   { }
+.rank-val { font-family:'DM Mono',monospace; font-size:11px; color:#555; min-width:40px; text-align:right; }
+
+/* TEAM ROWS */
+.team-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.team-flag { font-size:16px; min-width:22px; }
+.team-name { font-family:'Barlow Condensed',sans-serif; font-size:12px; color:#888; min-width:110px; }
+.team-complete { font-family:'DM Mono',monospace; font-size:10px; color:var(--green); min-width:80px; text-align:right; }
+
+/* FUNNEL */
+.funnel { display:flex; flex-direction:column; gap:10px; }
+.funnel-row { display:flex; align-items:center; gap:12px; }
+.funnel-label { font-family:'DM Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase; min-width:80px; }
+.funnel-bar-wrap { flex:1; height:8px; background:var(--border); border-radius:4px; overflow:hidden; }
+.funnel-bar { height:100%; border-radius:4px; transition:width 0.6s; }
+.funnel-val { font-family:'Bebas Neue',sans-serif; font-size:18px; min-width:30px; text-align:right; }
+#fbar-pending  { background:rgba(160,96,240,0.6); }
+#fbar-accepted { background:rgba(48,128,232,0.7); }
+#fbar-completed{ background:var(--green); }
+#fbar-declined { background:rgba(224,64,64,0.5); }
+.funnel-label.pending  { color:var(--gold); }
+.funnel-label.accepted { color:var(--blue); }
+.funnel-label.completed{ color:var(--green); }
+.funnel-label.declined { color:var(--red); }
+.funnel-val.pending  { color:var(--gold); }
+.funnel-val.accepted { color:var(--blue); }
+.funnel-val.completed{ color:var(--green); }
+.funnel-val.declined { color:var(--red); }
+
+/* USERS TABLE */
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; }
+thead th {
+  font-family:'DM Mono',monospace; font-size:10px; letter-spacing:2px; text-transform:uppercase;
+  color:#444; padding:10px 14px; text-align:left; border-bottom:1px solid var(--border);
+}
+tbody tr { border-bottom:1px solid rgba(255,255,255,0.03); transition:background 0.15s; }
+tbody tr:hover { background:var(--surface2); }
+tbody td { padding:10px 14px; font-size:13px; }
+
+.mode-pill {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600; letter-spacing:1px;
+  padding:3px 8px; border-radius:10px; white-space:nowrap;
+}
+.mode-pill.both { background:rgba(160,96,240,0.15); color:var(--gold); border:1px solid rgba(160,96,240,0.3); }
+.mode-pill.swap { background:rgba(48,192,96,0.1);  color:var(--green); border:1px solid rgba(48,192,96,0.25); }
+
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+</style>
+</head>
+<body>
+
+<div id="status-bar"></div>
+
+<!-- ── LOGIN ──────────────────────────────────────────────── -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="logo">NEXO</div>
+    <div class="sub">// admin panel</div>
+    <button class="btn-google" onclick="loginGoogle()">
+      <div class="google-logo"></div>
+      Entrar con Google
+    </button>
+  </div>
+  <p style="font-family:'DM Mono',monospace;font-size:11px;color:#333;">Acceso restringido al administrador</p>
+</div>
+
+<!-- ── BLOQUEADO ───────────────────────────────────────────── -->
+<div id="blocked-screen">
+  <h2>Acceso Denegado</h2>
+  <p>Tu cuenta no tiene permisos de administrador.</p>
+  <p style="color:#333;font-size:11px;margin-top:6px;">Redirigiendo…</p>
+</div>
+
+<!-- ── DASHBOARD ───────────────────────────────────────────── -->
+<div id="dashboard">
+  <div class="admin-header">
+    <div class="admin-logo">NEXO</div>
+    <div class="admin-badge">ADMIN</div>
+    <div class="admin-user">
+      <img id="admin-photo" src="" alt="">
+      <span id="admin-name"></span>
+      <span id="last-updated"></span>
+      <button class="btn-refresh" onclick="refresh()">↻ Actualizar</button>
+      <button class="btn-logout"  onclick="logoutAdmin()">Salir</button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- USUARIOS -->
+    <div class="section-hdr">Usuarios <span>OVERVIEW</span></div>
+    <div class="stats-grid">
+      <div class="stat-card" style="--sc-color:var(--gold)">
+        <div class="sc-icon">👥</div>
+        <div class="sc-val" id="stat-users">—</div>
+        <div class="sc-label">Registrados</div>
+      </div>
+      <div class="stat-card" style="--sc-color:var(--green)">
+        <div class="sc-icon">⚡</div>
+        <div class="sc-val" id="stat-active">—</div>
+        <div class="sc-label">Activos 7 días</div>
+      </div>
+      <div class="stat-card" style="--sc-color:var(--blue)">
+        <div class="sc-icon">👤</div>
+        <div class="sc-val" id="stat-profiles">—</div>
+        <div class="sc-label">Con perfil</div>
+      </div>
+      <div class="stat-card" style="--sc-color:var(--orange)">
+        <div class="sc-icon">📊</div>
+        <div class="sc-val" id="stat-avg">—</div>
+        <div class="sc-label">Progreso prom.</div>
+      </div>
+    </div>
+
+    <!-- INTERCAMBIOS -->
+    <div class="section-hdr">Mensajería y Propuestas <span>TRADE FUNNEL</span></div>
+    <div class="stats-grid" style="margin-bottom:16px;">
+      <div class="stat-card" style="--sc-color:#a060f0">
+        <div class="sc-icon">💬</div>
+        <div class="sc-val" id="stat-chats">—</div>
+        <div class="sc-label">Chats abiertos</div>
+      </div>
+      <div class="stat-card" style="--sc-color:var(--blue)">
+        <div class="sc-icon">✉️</div>
+        <div class="sc-val" id="stat-messages">—</div>
+        <div class="sc-label">Mensajes enviados</div>
+      </div>
+      <div class="stat-card" style="--sc-color:var(--orange)">
+        <div class="sc-icon">📋</div>
+        <div class="sc-val" id="stat-proposals">—</div>
+        <div class="sc-label">Propuestas totales</div>
+      </div>
+      <div class="stat-card" style="--sc-color:var(--green)">
+        <div class="sc-icon">🤝</div>
+        <div class="sc-val" id="stat-completed">—</div>
+        <div class="sc-label">Completados</div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px;">
+      <div class="panel-title">Estado de propuestas</div>
+      <div class="funnel">
+        <div class="funnel-row">
+          <span class="funnel-label pending">Pendientes</span>
+          <div class="funnel-bar-wrap"><div class="funnel-bar" id="fbar-pending" style="width:0%"></div></div>
+          <span class="funnel-val pending" id="funnel-pending">—</span>
+        </div>
+        <div class="funnel-row">
+          <span class="funnel-label accepted">Aceptadas</span>
+          <div class="funnel-bar-wrap"><div class="funnel-bar" id="fbar-accepted" style="width:0%"></div></div>
+          <span class="funnel-val accepted" id="funnel-accepted">—</span>
+        </div>
+        <div class="funnel-row">
+          <span class="funnel-label completed">Completadas</span>
+          <div class="funnel-bar-wrap"><div class="funnel-bar" id="fbar-completed" style="width:0%"></div></div>
+          <span class="funnel-val completed" id="funnel-completed">—</span>
+        </div>
+        <div class="funnel-row">
+          <span class="funnel-label declined">Rechazadas</span>
+          <div class="funnel-bar-wrap"><div class="funnel-bar" id="fbar-declined" style="width:0%"></div></div>
+          <span class="funnel-val declined" id="funnel-declined">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- STICKER INSIGHTS -->
+    <div class="section-hdr">Estampas <span>INSIGHTS</span></div>
+    <div class="two-col">
+      <div class="panel">
+        <div class="panel-title">🔴 Más difíciles de conseguir</div>
+        <div id="most-missed"><p style="color:#333;font-size:12px;">Cargando…</p></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">🟠 Más repetidas en el grupo</div>
+        <div id="most-duped"><p style="color:#333;font-size:12px;">Cargando…</p></div>
+      </div>
+    </div>
+
+    <!-- EQUIPOS -->
+    <div class="section-hdr">Equipos <span>% POSESIÓN PROMEDIO</span></div>
+    <div class="panel">
+      <div class="panel-title">Porcentaje de posesión entre todos los usuarios</div>
+      <div id="team-completion" style="column-count:2;column-gap:24px;">
+        <p style="color:#333;font-size:12px;">Cargando…</p>
+      </div>
+    </div>
+
+    <!-- TABLA DE USUARIOS -->
+    <div class="section-hdr">Usuarios <span>DETALLE</span></div>
+    <div class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Usuario</th>
+              <th>Modo</th>
+              <th>Progreso</th>
+              <th>Conseguidas</th>
+              <th>Repetidas</th>
+              <th>Activo</th>
+            </tr>
+          </thead>
+          <tbody id="users-table-body">
+            <tr><td colspan="7" style="text-align:center;color:#333;padding:30px;">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>
