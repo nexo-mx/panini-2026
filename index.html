@@ -12,10 +12,12 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs }
-  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+  getFirestore, doc, setDoc, getDoc, onSnapshot,
+  collection, getDocs, addDoc, updateDoc, serverTimestamp,
+  query, where, orderBy, limit, arrayUnion, Timestamp
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-// ─── REEMPLAZA ESTOS VALORES CON LOS DE TU PROYECTO FIREBASE ───
 const firebaseConfig = {
   apiKey:            "AIzaSyBjEPXyVt7ABkJk8fm9EUEoMyMqSRG_oIU",
   authDomain:        "panini-2026-41b58.firebaseapp.com",
@@ -24,14 +26,14 @@ const firebaseConfig = {
   messagingSenderId: "594186262464",
   appId:             "1:594186262464:web:0304fd3302ca6f7a6e5a25"
 };
-// ────────────────────────────────────────────────────────────────
 
 const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db   = getFirestore(app);
 
 let currentUser = null;
-let unsubscribe = null;
+let unsubscribeUser = null;
+let unsubscribeChats = null;
 
 // ── AUTH ──────────────────────────────────────────────────────
 window.loginGoogle = async () => {
@@ -43,7 +45,8 @@ window.loginGoogle = async () => {
 
 window.logoutUser = async () => {
   if (!confirm('¿Cerrar sesión?')) return;
-  if (unsubscribe) unsubscribe();
+  if (unsubscribeUser) unsubscribeUser();
+  if (unsubscribeChats) unsubscribeChats();
   await signOut(auth);
 };
 
@@ -52,32 +55,26 @@ onAuthStateChanged(auth, async user => {
   if (user) {
     showApp(user);
     subscribeToMyData(user.uid);
-    // Load profile — show onboarding if incomplete
+    subscribeToMyChats(user.uid);
     try {
       const snap = await getDoc(doc(db, 'users', user.uid));
       if (snap.exists() && snap.data().profile) {
         window.userProfile = snap.data().profile;
         const n = document.getElementById('user-name');
         if (n && window.userProfile.nickname) n.textContent = window.userProfile.nickname;
-        // Show onboarding if missing required fields
         const p = window.userProfile;
-        if (!p.phone || !p.city || !p.mode) {
-          setTimeout(() => showOnboarding(p), 600);
-        }
+        if (!p.phone || !p.city || !p.mode) setTimeout(() => showOnboarding(p), 600);
       } else {
-        // Brand new user — show onboarding
         setTimeout(() => showOnboarding({}), 600);
       }
-    } catch(e) {
-      setTimeout(() => showOnboarding({}), 600);
-    }
+    } catch(e) { setTimeout(() => showOnboarding({}), 600); }
     await loadAllUsersData();
   } else {
     showLogin();
   }
 });
 
-// ── FIRESTORE ─────────────────────────────────────────────────
+// ── FIRESTORE — USER DATA ─────────────────────────────────────
 async function saveToCloud(data) {
   if (!currentUser) return;
   await setDoc(doc(db, 'users', currentUser.uid), {
@@ -90,11 +87,10 @@ async function saveToCloud(data) {
 }
 
 function subscribeToMyData(uid) {
-  if (unsubscribe) unsubscribe();
-  unsubscribe = onSnapshot(doc(db, 'users', uid), snap => {
+  if (unsubscribeUser) unsubscribeUser();
+  unsubscribeUser = onSnapshot(doc(db, 'users', uid), snap => {
     if (snap.exists()) {
       const data = snap.data().stickers || {};
-      // Convert: stored as { "MEX 1": 2 } (count per sticker)
       window.collected = data;
       renderAll();
       updateStats();
@@ -109,7 +105,7 @@ window.loadAllUsersData = async () => {
     window.allUsersData = {};
     snap.forEach(d => {
       if (d.id !== currentUser.uid) {
-        window.allUsersData[d.id] = d.data();
+        window.allUsersData[d.id] = { ...d.data(), uid: d.id };
       }
     });
     renderTrades();
@@ -127,6 +123,520 @@ window._saveProfileToCloud = async (profile) => {
     photoURL: currentUser.photoURL,
   }, { merge: true });
 };
+
+// ═══════════════════════════════════════════════════════════════
+// MESSAGING / TRADE PROPOSALS — FIRESTORE
+// Estructura: colección "chats", doc id = uid1_uid2 (ordenados)
+// {
+//   participants: [uid1, uid2],
+//   messages: [{from, text, ts}],
+//   proposal: { fromUid, offeredCodes:[], wantedCodes:[], status:'pending'|'countered'|'accepted'|'completed', ts },
+//   unread: { uid1: 0, uid2: 3 }
+// }
+// ═══════════════════════════════════════════════════════════════
+
+function chatId(uidA, uidB) {
+  return [uidA, uidB].sort().join('_');
+}
+
+// Subscribe to all chats involving current user → update notification badge
+function subscribeToMyChats(uid) {
+  if (unsubscribeChats) unsubscribeChats();
+  const q = query(collection(db, 'chats'), where('participants', 'array-contains', uid));
+  unsubscribeChats = onSnapshot(q, snap => {
+    let totalUnread = 0;
+    snap.forEach(d => {
+      const data = d.data();
+      totalUnread += (data.unread?.[uid] || 0);
+    });
+    window._totalUnread = totalUnread;
+    updateNotifBadge(totalUnread);
+
+    // If a chat modal is open, refresh it
+    if (window._openChatUid) {
+      const cid = chatId(uid, window._openChatUid);
+      const changedDoc = snap.docs.find(d => d.id === cid);
+      if (changedDoc) renderChatModal(changedDoc.data(), window._openChatUid);
+    }
+  });
+}
+
+function updateNotifBadge(count) {
+  const badge = document.getElementById('notif-badge');
+  if (!badge) return;
+  badge.textContent = count;
+  badge.style.display = count > 0 ? 'flex' : 'none';
+}
+
+// Open a chat with another user
+window.openChat = async (otherUid) => {
+  if (!currentUser) return;
+  window._openChatUid = otherUid;
+  const cid = chatId(currentUser.uid, otherUid);
+
+  // Mark as read
+  try {
+    await setDoc(doc(db, 'chats', cid), {
+      participants: [currentUser.uid, otherUid],
+      [`unread.${currentUser.uid}`]: 0
+    }, { merge: true });
+  } catch(e) {}
+
+  // Get current data & show modal
+  try {
+    const snap = await getDoc(doc(db, 'chats', cid));
+    const data = snap.exists() ? snap.data() : { messages: [], proposal: null, unread: {} };
+    renderChatModal(data, otherUid);
+  } catch(e) {
+    renderChatModal({ messages: [], proposal: null, unread: {} }, otherUid);
+  }
+  document.getElementById('chat-modal').classList.add('open');
+};
+
+window.closeChat = () => {
+  document.getElementById('chat-modal').classList.remove('open');
+  window._openChatUid = null;
+};
+
+// Send a plain message
+window.sendMessage = async () => {
+  const input = document.getElementById('chat-input');
+  const text  = input?.value.trim();
+  if (!text || !currentUser || !window._openChatUid) return;
+  input.value = '';
+
+  const cid     = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+  const msg = { from: currentUser.uid, text, ts: Date.now() };
+
+  try {
+    await setDoc(doc(db, 'chats', cid), {
+      participants: [currentUser.uid, otherUid],
+      messages: arrayUnion(msg),
+      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
+      [`unread.${currentUser.uid}`]: 0
+    }, { merge: true });
+  } catch(e) { showToast('❌ Error al enviar'); }
+};
+
+// Open the proposal builder
+window.openProposalBuilder = () => {
+  if (!currentUser || !window._openChatUid) return;
+  const otherUid = window._openChatUid;
+  const otherData = window.allUsersData[otherUid] || {};
+  const otherStickers = otherData.stickers || {};
+
+  // My duplicates (what I can offer)
+  const myDups = [];
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      const n = getCount(st.code);
+      if (n > 1) myDups.push(st.code);
+    }
+  }
+
+  // What I'm missing that the other has duplicates of
+  const theyCanGive = [];
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      const myN = getCount(st.code);
+      const theirN = otherStickers[st.code] || 0;
+      if (myN === 0 && theirN > 1) theyCanGive.push(st.code);
+    }
+  }
+
+  const otherName = otherData.profile?.nickname || otherData.displayName || 'el otro usuario';
+
+  let html = `
+  <div class="proposal-builder">
+    <div class="pb-title">📋 Proponer Intercambio</div>
+    <p class="pb-sub">Selecciona qué quieres pedir y qué ofreces a cambio.</p>
+
+    <div class="pb-section">
+      <div class="pb-label give">✅ Yo ofrezco (mis repetidas) <span class="pb-count" id="pb-offer-count">0 selec.</span></div>
+      ${myDups.length === 0
+        ? '<p class="pb-empty">No tienes repetidas para ofrecer aún.</p>'
+        : `<div class="pb-chips" id="pb-offer-chips">
+          ${myDups.map(code => `
+            <div class="pb-chip" data-code="${code}" data-side="offer" onclick="togglePbChip(this,'offer')">
+              ${isHolo(code)?'✨ ':''}${code}
+            </div>`).join('')}
+          </div>`
+      }
+    </div>
+
+    <div class="pb-section">
+      <div class="pb-label want">🔵 Yo pido (sus repetidas que me faltan) <span class="pb-count" id="pb-want-count">0 selec.</span></div>
+      ${theyCanGive.length === 0
+        ? `<p class="pb-empty">${otherName} no tiene repetidas de lo que te falta (o sus datos no están actualizados).</p>`
+        : `<div class="pb-chips" id="pb-want-chips">
+          ${theyCanGive.map(code => `
+            <div class="pb-chip" data-code="${code}" data-side="want" onclick="togglePbChip(this,'want')">
+              ${isHolo(code)?'✨ ':''}${code}
+            </div>`).join('')}
+          </div>`
+      }
+    </div>
+
+    <div class="pb-actions">
+      <button class="btn btn-outline" onclick="closePbModal()">Cancelar</button>
+      <button class="btn btn-gold" onclick="submitProposal()">📤 Enviar Propuesta</button>
+    </div>
+  </div>`;
+
+  document.getElementById('pb-modal-content').innerHTML = html;
+  document.getElementById('pb-modal').classList.add('open');
+};
+
+window.togglePbChip = (el, side) => {
+  el.classList.toggle('selected');
+  const chips = document.querySelectorAll(`[data-side="${side}"]`);
+  const count = Array.from(chips).filter(c => c.classList.contains('selected')).length;
+  const countEl = document.getElementById(`pb-${side}-count`);
+  if (countEl) countEl.textContent = `${count} selec.`;
+};
+
+window.closePbModal = () => {
+  document.getElementById('pb-modal').classList.remove('open');
+};
+
+window.submitProposal = async () => {
+  if (!currentUser || !window._openChatUid) return;
+
+  const offerChips = Array.from(document.querySelectorAll('[data-side="offer"].selected')).map(c => c.dataset.code);
+  const wantChips  = Array.from(document.querySelectorAll('[data-side="want"].selected')).map(c => c.dataset.code);
+
+  if (offerChips.length === 0) { showToast('⚠️ Selecciona al menos una estampa para ofrecer'); return; }
+  if (wantChips.length === 0)  { showToast('⚠️ Selecciona al menos una estampa para pedir'); return; }
+
+  const cid      = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+
+  const proposal = {
+    fromUid: currentUser.uid,
+    offeredCodes: offerChips,
+    wantedCodes: wantChips,
+    status: 'pending',
+    ts: Date.now()
+  };
+
+  const sysMsg = {
+    from: '__system__',
+    text: `📋 ${window.userProfile?.nickname || currentUser.displayName} propuso un intercambio: ofrece ${offerChips.length} estampa(s) y pide ${wantChips.length} a cambio.`,
+    ts: Date.now()
+  };
+
+  try {
+    await setDoc(doc(db, 'chats', cid), {
+      participants: [currentUser.uid, otherUid],
+      messages: arrayUnion(sysMsg),
+      proposal,
+      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
+      [`unread.${currentUser.uid}`]: 0
+    }, { merge: true });
+    closePbModal();
+    showToast('✅ Propuesta enviada');
+  } catch(e) { console.error(e); showToast('❌ Error al enviar propuesta'); }
+};
+
+// Counter-proposal: recipient selects their own offer/want
+window.openCounterProposal = () => {
+  if (!currentUser || !window._openChatUid) return;
+  const otherUid  = window._openChatUid;
+  const otherData = window.allUsersData[otherUid] || {};
+  const otherStickers = otherData.stickers || {};
+
+  const myDups = [];
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      if (getCount(st.code) > 1) myDups.push(st.code);
+    }
+  }
+  const theyCanGive = [];
+  for (const sec of SECTIONS) {
+    for (const st of sec.stickers) {
+      const myN = getCount(st.code);
+      const theirN = otherStickers[st.code] || 0;
+      if (myN === 0 && theirN > 1) theyCanGive.push(st.code);
+    }
+  }
+
+  let html = `
+  <div class="proposal-builder">
+    <div class="pb-title">↩️ Proponer Contraoferta</div>
+    <p class="pb-sub">La otra persona rechazó los términos. Propón los tuyos.</p>
+
+    <div class="pb-section">
+      <div class="pb-label give">✅ Yo ofrezco <span class="pb-count" id="pb-offer-count">0 selec.</span></div>
+      ${myDups.length === 0
+        ? '<p class="pb-empty">No tienes repetidas para ofrecer.</p>'
+        : `<div class="pb-chips" id="pb-offer-chips">
+          ${myDups.map(code => `<div class="pb-chip" data-code="${code}" data-side="offer" onclick="togglePbChip(this,'offer')">${isHolo(code)?'✨ ':''}${code}</div>`).join('')}
+          </div>`}
+    </div>
+    <div class="pb-section">
+      <div class="pb-label want">🔵 Yo pido <span class="pb-count" id="pb-want-count">0 selec.</span></div>
+      ${theyCanGive.length === 0
+        ? '<p class="pb-empty">No hay estampas disponibles para pedir.</p>'
+        : `<div class="pb-chips" id="pb-want-chips">
+          ${theyCanGive.map(code => `<div class="pb-chip" data-code="${code}" data-side="want" onclick="togglePbChip(this,'want')">${isHolo(code)?'✨ ':''}${code}</div>`).join('')}
+          </div>`}
+    </div>
+    <div class="pb-actions">
+      <button class="btn btn-outline" onclick="closePbModal()">Cancelar</button>
+      <button class="btn btn-gold" onclick="submitCounter()">📤 Enviar Contraoferta</button>
+    </div>
+  </div>`;
+
+  document.getElementById('pb-modal-content').innerHTML = html;
+  document.getElementById('pb-modal').classList.add('open');
+};
+
+window.submitCounter = async () => {
+  if (!currentUser || !window._openChatUid) return;
+  const offerChips = Array.from(document.querySelectorAll('[data-side="offer"].selected')).map(c => c.dataset.code);
+  const wantChips  = Array.from(document.querySelectorAll('[data-side="want"].selected')).map(c => c.dataset.code);
+  if (offerChips.length === 0 || wantChips.length === 0) { showToast('⚠️ Selecciona estampas en ambos lados'); return; }
+
+  const cid = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+  const proposal = {
+    fromUid: currentUser.uid,
+    offeredCodes: offerChips,
+    wantedCodes: wantChips,
+    status: 'pending',
+    ts: Date.now()
+  };
+  const sysMsg = { from: '__system__', text: `↩️ ${window.userProfile?.nickname || currentUser.displayName} envió una contraoferta.`, ts: Date.now() };
+
+  try {
+    await setDoc(doc(db, 'chats', cid), {
+      participants: [currentUser.uid, otherUid],
+      messages: arrayUnion(sysMsg),
+      proposal,
+      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
+      [`unread.${currentUser.uid}`]: 0
+    }, { merge: true });
+    closePbModal();
+    showToast('✅ Contraoferta enviada');
+  } catch(e) { showToast('❌ Error al enviar'); }
+};
+
+// Accept proposal
+window.acceptProposal = async () => {
+  if (!currentUser || !window._openChatUid) return;
+  const cid = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+  const sysMsg = { from: '__system__', text: `✅ ¡${window.userProfile?.nickname || currentUser.displayName} aceptó el intercambio! Coordinen el encuentro por WhatsApp. Cuando lo hayan completado, cada uno debe pulsar "Intercambio completado".`, ts: Date.now() };
+  try {
+    await setDoc(doc(db, 'chats', cid), {
+      'proposal.status': 'accepted',
+      messages: arrayUnion(sysMsg),
+      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
+    }, { merge: true });
+    showToast('🎉 ¡Intercambio aceptado!');
+  } catch(e) { showToast('❌ Error'); }
+};
+
+// Decline proposal
+window.declineProposal = async () => {
+  if (!currentUser || !window._openChatUid) return;
+  if (!confirm('¿Rechazar esta propuesta?')) return;
+  const cid = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+  const sysMsg = { from: '__system__', text: `❌ ${window.userProfile?.nickname || currentUser.displayName} rechazó la propuesta.`, ts: Date.now() };
+  try {
+    await setDoc(doc(db, 'chats', cid), {
+      'proposal.status': 'declined',
+      messages: arrayUnion(sysMsg),
+      [`unread.${otherUid}`]: (window._chatData?.unread?.[otherUid] || 0) + 1,
+    }, { merge: true });
+  } catch(e) { showToast('❌ Error'); }
+};
+
+// Mark trade as completed — update stickers
+window.completeTradeConfirm = async () => {
+  if (!currentUser || !window._openChatUid) return;
+  if (!window._chatData?.proposal) return;
+
+  const proposal = window._chatData.proposal;
+  const cid      = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+  const myUid    = currentUser.uid;
+  const iAmProposer = proposal.fromUid === myUid;
+
+  // What I give = what I offered; what I receive = what I wanted
+  // If I'm proposer: offeredCodes = I give, wantedCodes = I receive
+  // If I'm receiver: offeredCodes = they give (I receive), wantedCodes = they want (I give)
+  const iGive    = iAmProposer ? proposal.offeredCodes : proposal.wantedCodes;
+  const iReceive = iAmProposer ? proposal.wantedCodes  : proposal.offeredCodes;
+
+  const summary = `Esto eliminará ${iGive.length} repetida(s) que das y agregará ${iReceive.length} estampa(s) que recibes. ¿Estás seguro?`;
+  if (!confirm(`🤝 ¿Confirmar Intercambio completado?\n\n${summary}\n\nEsta acción no se puede deshacer.`)) return;
+
+  // Apply sticker changes to my collection
+  const newCollected = { ...window.collected };
+  for (const code of iGive) {
+    if ((newCollected[code] || 0) > 1) newCollected[code] = (newCollected[code] || 0) - 1;
+  }
+  for (const code of iReceive) {
+    newCollected[code] = (newCollected[code] || 0) + 1;
+  }
+  window.collected = newCollected;
+  renderAll();
+  updateStats();
+  await saveToCloud(newCollected);
+
+  // Mark completion for this user
+  const completedByField = `proposal.completedBy.${myUid}`;
+  const sysMsg = { from: '__system__', text: `✅ ${window.userProfile?.nickname || currentUser.displayName} marcó el intercambio como completado.`, ts: Date.now() };
+
+  try {
+    const snap = await getDoc(doc(db, 'chats', cid));
+    const data = snap.exists() ? snap.data() : {};
+    const completedBy = data.proposal?.completedBy || {};
+    completedBy[myUid] = true;
+
+    const bothCompleted = completedBy[currentUser.uid] && completedBy[otherUid];
+    const update = {
+      [`proposal.completedBy.${myUid}`]: true,
+      messages: arrayUnion(sysMsg),
+      [`unread.${otherUid}`]: (data.unread?.[otherUid] || 0) + 1,
+    };
+    if (bothCompleted || completedBy[otherUid]) {
+      update['proposal.status'] = 'completed';
+      update.messages = arrayUnion(sysMsg, { from: '__system__', text: '🎉 ¡Ambos confirmaron! Intercambio completado con éxito.', ts: Date.now() + 1 });
+    }
+    await setDoc(doc(db, 'chats', cid), update, { merge: true });
+    showToast('✅ ¡Listo! Tu álbum fue actualizado.');
+    celebrate();
+  } catch(e) { console.error(e); showToast('❌ Error al completar'); }
+};
+
+// Render the chat modal content
+function renderChatModal(data, otherUid) {
+  window._chatData = data;
+  const otherData = window.allUsersData[otherUid] || {};
+  const otherName = otherData.profile?.nickname || otherData.displayName || 'Usuario';
+  const otherPhoto = otherData.photoURL;
+
+  // Header
+  document.getElementById('chat-modal-title').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="utc-avatar" style="width:36px;height:36px;flex-shrink:0;">
+        ${otherPhoto ? `<img src="${otherPhoto}" alt="">` : '👤'}
+      </div>
+      <div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:700;letter-spacing:1px;">${otherName}</div>
+        <div style="font-size:11px;color:#555;">${otherData.profile?.city || ''}</div>
+      </div>
+    </div>`;
+
+  // Messages
+  const msgs = data.messages || [];
+  const myUid = currentUser?.uid;
+  let msgsHtml = '';
+  for (const m of msgs) {
+    if (m.from === '__system__') {
+      msgsHtml += `<div class="chat-sys">${m.text}</div>`;
+    } else {
+      const isMe = m.from === myUid;
+      const time = new Date(m.ts).toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit' });
+      msgsHtml += `<div class="chat-bubble ${isMe?'me':'them'}">
+        <div class="chat-text">${escapeHtml(m.text)}</div>
+        <div class="chat-time">${time}</div>
+      </div>`;
+    }
+  }
+  const messagesEl = document.getElementById('chat-messages');
+  messagesEl.innerHTML = msgsHtml || '<div class="chat-empty">No hay mensajes aún. ¡Di hola! 👋</div>';
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  // Proposal panel
+  const proposal = data.proposal;
+  const proposalEl = document.getElementById('chat-proposal-area');
+
+  if (!proposal) {
+    proposalEl.innerHTML = `
+      <button class="btn btn-gold" style="width:100%;" onclick="openProposalBuilder()">
+        📋 Proponer Intercambio
+      </button>`;
+    return;
+  }
+
+  const iAmProposer = proposal.fromUid === myUid;
+  const iAmResponder = !iAmProposer;
+  const status = proposal.status;
+
+  // Build display for proposal stickers
+  const proposerName = iAmProposer ? 'Tú' : otherName;
+  const offeredLabel = iAmProposer ? 'Tú ofreces' : `${otherName} ofrece`;
+  const wantedLabel  = iAmProposer ? 'Tú pides' : `${otherName} pide`;
+
+  let offeredHtml = proposal.offeredCodes.map(c =>
+    `<span class="chip ${isHolo(c)?'chip-holo':'chip-give'}">${isHolo(c)?'✨ ':''}${c}</span>`).join('');
+  let wantedHtml  = proposal.wantedCodes.map(c =>
+    `<span class="chip ${isHolo(c)?'chip-holo-want':'chip-want'}">${isHolo(c)?'✨ ':''}${c}</span>`).join('');
+
+  const completedBy = proposal.completedBy || {};
+  const myCompleted = completedBy[myUid];
+
+  let actionsHtml = '';
+
+  if (status === 'pending' && iAmResponder) {
+    actionsHtml = `
+      <div class="proposal-actions">
+        <button class="btn btn-danger" onclick="declineProposal()">❌ Rechazar</button>
+        <button class="btn" style="background:rgba(48,192,96,0.2);color:var(--green);border:1px solid rgba(48,192,96,0.4);" onclick="acceptProposal()">✅ Aceptar</button>
+      </div>`;
+  } else if (status === 'pending' && iAmProposer) {
+    actionsHtml = `<div class="proposal-status pending">⏳ Esperando respuesta de ${otherName}…</div>`;
+  } else if (status === 'declined') {
+    actionsHtml = `
+      <div class="proposal-status declined">❌ Propuesta rechazada</div>
+      <div class="proposal-actions" style="margin-top:8px;">
+        <button class="btn btn-outline" onclick="openCounterProposal()">↩️ Hacer Contraoferta</button>
+        <button class="btn btn-gold" onclick="openProposalBuilder()">📋 Nueva Propuesta</button>
+      </div>`;
+  } else if (status === 'accepted') {
+    if (!myCompleted) {
+      actionsHtml = `
+        <div class="proposal-status accepted">✅ Propuesta aceptada — coordinen el encuentro</div>
+        <div class="proposal-actions" style="margin-top:8px;">
+          <button class="btn btn-gold" style="width:100%;" onclick="completeTradeConfirm()">🤝 Intercambio Completado</button>
+        </div>`;
+    } else {
+      actionsHtml = `<div class="proposal-status accepted">✅ Ya marcaste como completado. Esperando al otro…</div>`;
+    }
+  } else if (status === 'completed') {
+    actionsHtml = `<div class="proposal-status completed">🎉 ¡Intercambio completado!</div>`;
+  }
+
+  proposalEl.innerHTML = `
+    <div class="proposal-card">
+      <div class="proposal-card-title">📋 Propuesta de intercambio</div>
+      <div class="proposal-row">
+        <span class="proposal-row-label give">${offeredLabel}</span>
+        <div class="trade-chips">${offeredHtml}</div>
+      </div>
+      <div class="proposal-row">
+        <span class="proposal-row-label want">${wantedLabel}</span>
+        <div class="trade-chips">${wantedHtml}</div>
+      </div>
+      ${actionsHtml}
+      ${status === 'completed' || status === 'declined' ? `
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+          <button class="btn btn-gold" style="width:100%;" onclick="openProposalBuilder()">📋 Nueva Propuesta</button>
+        </div>` : ''}
+    </div>`;
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+window._openChatUid = null;
+window._chatData    = null;
 
 // ── UI HELPERS ────────────────────────────────────────────────
 function showLogin() {
@@ -167,92 +677,32 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 
 /* ── LOGIN SCREEN ─────────────────────────────────────────── */
 #login-screen {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  background: radial-gradient(ellipse at 50% 0%, #1a1020 0%, #0a0a0f 70%);
-  gap: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 100vh; background: radial-gradient(ellipse at 50% 0%, #1a1020 0%, #0a0a0f 70%); gap: 0;
 }
-
 .login-ball {
   width: 80px; height: 80px; border-radius: 50%;
   background: linear-gradient(135deg, #a060f0, #6030c0);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 40px;
-  box-shadow: 0 0 40px rgba(160,96,240,0.5);
-  animation: pulse 2s ease-in-out infinite;
-  margin-bottom: 24px;
+  display: flex; align-items: center; justify-content: center; font-size: 40px;
+  box-shadow: 0 0 40px rgba(160,96,240,0.5); animation: pulse 2s ease-in-out infinite; margin-bottom: 24px;
 }
-
 @keyframes pulse { 0%,100%{box-shadow:0 0 30px rgba(160,96,240,0.4)} 50%{box-shadow:0 0 60px rgba(160,96,240,0.7)} }
-
 .login-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 40px;
-  text-align: center;
-  max-width: 380px;
-  width: 90%;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 20px;
+  padding: 40px; text-align: center; max-width: 380px; width: 90%;
   box-shadow: 0 20px 60px rgba(0,0,0,0.5);
 }
-
-.login-box h1 {
-  font-family: 'Bebas Neue', sans-serif;
-  font-size: 36px;
-  letter-spacing: 8px;
-  color: white;
-  margin-bottom: 4px;
-}
-
-.login-box p {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 12px;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: #666;
-  margin-bottom: 32px;
-}
-
-.login-divider {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 24px 0;
-}
-
-.login-desc {
-  font-size: 13px;
-  color: #777;
-  line-height: 1.6;
-  margin-bottom: 28px;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
+.login-box h1 { font-family: 'Bebas Neue', sans-serif; font-size: 36px; letter-spacing: 8px; color: white; margin-bottom: 4px; }
+.login-box p { font-family: 'Barlow Condensed', sans-serif; font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: #666; margin-bottom: 32px; }
+.login-divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+.login-desc { font-size: 13px; color: #777; line-height: 1.6; margin-bottom: 28px; letter-spacing: 0; text-transform: none; }
 .btn-google {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  width: 100%;
-  padding: 14px 20px;
-  background: white;
-  color: #333;
-  border: none;
-  border-radius: 10px;
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  cursor: pointer;
-  transition: all 0.2s;
-  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+  display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%;
+  padding: 14px 20px; background: white; color: #333; border: none; border-radius: 10px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 600; letter-spacing: 1px;
+  cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
 }
-
 .btn-google:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.4); }
-
 .google-logo {
   width: 20px; height: 20px;
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill='%23EA4335' d='M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z'/%3E%3Cpath fill='%234285F4' d='M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z'/%3E%3Cpath fill='%23FBBC05' d='M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z'/%3E%3Cpath fill='%2334A853' d='M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z'/%3E%3C/svg%3E") center/contain no-repeat;
@@ -264,47 +714,21 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 /* HEADER */
 .header {
   background: linear-gradient(135deg, #0a0a0d 0%, #110d1a 40%, #0d0a14 100%);
-  border-bottom: 2px solid var(--nexo);
-  position: sticky; top: 0; z-index: 100;
+  border-bottom: 2px solid var(--nexo); position: sticky; top: 0; z-index: 100;
   box-shadow: 0 4px 40px rgba(160,96,240,0.15);
 }
-
-.header-inner {
-  max-width: 1400px; margin: 0 auto; padding: 10px 20px;
-  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-}
-
+.header-inner { max-width: 1400px; margin: 0 auto; padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .logo-area { display: flex; align-items: center; gap: 10px; }
-
-.logo-ball {
-  width: 40px; height: 40px; border-radius: 50%;
-  background: linear-gradient(135deg, #a060f0, #6030c0);
-  display: flex; align-items: center; justify-content: center; font-size: 20px;
-  animation: pulse 2s ease-in-out infinite;
-}
-
 .logo-text h1 { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:6px; color:white; line-height:1; }
 .logo-text p  { font-family:'Barlow Condensed',sans-serif; font-size:9px; letter-spacing:3px; text-transform:uppercase; color:#666; }
-
 .progress-area { flex:1; min-width:160px; }
 .prog-nums { display:flex; justify-content:space-between; font-family:'Barlow Condensed',sans-serif; font-size:12px; color:#aaa; margin-bottom:4px; }
 .prog-nums strong { color:var(--gold); font-size:14px; }
 .prog-track { height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
 .prog-fill { height:100%; background:linear-gradient(90deg, var(--gold2), var(--gold)); border-radius:3px; transition:width 0.4s; }
-
 .user-area { display:flex; align-items:center; gap:10px; flex-shrink:0; }
-
-#user-photo {
-  width:32px; height:32px; border-radius:50%;
-  border:2px solid var(--nexo);
-  object-fit:cover;
-}
-
-#user-name {
-  font-family:'Barlow Condensed',sans-serif;
-  font-size:13px; color:#aaa; letter-spacing:1px;
-  max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-}
+#user-photo { width:32px; height:32px; border-radius:50%; border:2px solid var(--nexo); object-fit:cover; }
+#user-name { font-family:'Barlow Condensed',sans-serif; font-size:13px; color:#aaa; letter-spacing:1px; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 .btn {
   font-family:'Barlow Condensed',sans-serif; font-size:12px; font-weight:600;
@@ -318,29 +742,33 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .btn-danger { background:transparent; color:var(--red); border:1px solid rgba(224,48,48,0.4); }
 .btn-danger:hover { background:var(--red); color:white; }
 
-/* TABS */
-.tabs {
-  max-width:1400px; margin:0 auto; padding:12px 20px 0;
-  display:flex; gap:4px; border-bottom:1px solid var(--border);
+/* NOTIF BUTTON */
+.notif-btn {
+  position:relative; background:transparent; border:1px solid var(--border); border-radius:20px;
+  padding:6px 12px; cursor:pointer; display:flex; align-items:center; gap:6px;
+  font-family:'Barlow Condensed',sans-serif; font-size:12px; color:#aaa; transition:all 0.2s;
+}
+.notif-btn:hover { border-color:var(--nexo); color:var(--text); }
+#notif-badge {
+  position:absolute; top:-5px; right:-5px; background:var(--red); color:white;
+  font-family:'Bebas Neue',sans-serif; font-size:11px; min-width:18px; height:18px;
+  border-radius:9px; display:none; align-items:center; justify-content:center;
+  padding:0 4px; border:2px solid var(--bg);
 }
 
+/* TABS */
+.tabs { max-width:1400px; margin:0 auto; padding:12px 20px 0; display:flex; gap:4px; border-bottom:1px solid var(--border); }
 .tab {
   font-family:'Barlow Condensed',sans-serif; font-size:13px; font-weight:600;
   letter-spacing:2px; text-transform:uppercase; padding:10px 18px;
   background:transparent; border:none; color:#666; cursor:pointer;
-  border-bottom:2px solid transparent; margin-bottom:-1px;
-  transition:all 0.2s;
+  border-bottom:2px solid transparent; margin-bottom:-1px; transition:all 0.2s;
 }
-
 .tab.active { color:var(--gold); border-bottom-color:var(--gold); }
 .tab:hover:not(.active) { color:#aaa; }
 
 /* CONTROLS */
-.controls {
-  max-width:1400px; margin:0 auto; padding:14px 20px;
-  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
-}
-
+.controls { max-width:1400px; margin:0 auto; padding:14px 20px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .search-wrap { position:relative; flex:1; min-width:180px; }
 .search-wrap input {
   width:100%; background:var(--surface); border:1px solid var(--border);
@@ -350,7 +778,6 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .search-wrap input:focus { border-color:var(--nexo); }
 .search-wrap input::placeholder { color:#444; }
 .search-icon { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:#444; font-size:13px; }
-
 .filter-btn {
   font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
   letter-spacing:1.5px; text-transform:uppercase; padding:7px 12px;
@@ -366,10 +793,8 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 /* STATS BAR */
 .stats-bar {
   background:var(--surface2); border:1px solid var(--border); border-radius:10px;
-  padding:16px 20px; margin-bottom:20px;
-  display:flex; gap:24px; flex-wrap:wrap; align-items:center;
+  padding:16px 20px; margin-bottom:20px; display:flex; gap:24px; flex-wrap:wrap; align-items:center;
 }
-
 .stat { text-align:center; }
 .stat-n { font-family:'Bebas Neue',sans-serif; font-size:30px; line-height:1; color:var(--gold); display:block; }
 .stat-n.green { color:var(--green); }
@@ -397,28 +822,18 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 }
 .team-card:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,0.4); border-color:#3a3a50; }
 .team-card.complete { border-color:var(--green); box-shadow:0 0 12px rgba(48,192,96,0.1); }
-
-.card-header {
-  padding:12px 14px 10px; display:flex; align-items:center; gap:10px;
-  cursor:pointer; user-select:none;
-}
-
+.card-header { padding:12px 14px 10px; display:flex; align-items:center; gap:10px; cursor:pointer; user-select:none; }
 .card-flag { font-size:26px; line-height:1; min-width:32px; text-align:center; }
-
 .card-info { flex:1; min-width:0; }
 .card-name { font-family:'Barlow Condensed',sans-serif; font-size:15px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--text); }
 .card-code { font-size:10px; color:var(--nexo2); letter-spacing:2px; font-family:'Barlow Condensed',sans-serif; margin-top:1px; }
-
 .card-meta { display:flex; align-items:center; gap:8px; flex-shrink:0; }
-
 .minibar-wrap { width:44px; height:4px; background:var(--border); border-radius:2px; }
 .minibar-fill { height:100%; background:linear-gradient(90deg,var(--gold2),var(--gold)); border-radius:2px; transition:width 0.3s; }
 .minibar-fill.full { background:var(--green); }
-
 .card-count { font-family:'Barlow Condensed',sans-serif; font-size:16px; font-weight:700; color:var(--gold); min-width:36px; text-align:right; }
 .card-count.full { color:var(--green); }
 .card-arrow { color:#444; font-size:14px; margin-left:2px; }
-
 .complete-badge {
   position:absolute; top:8px; right:8px;
   background:var(--green); color:#0a0a0f;
@@ -429,14 +844,9 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 /* STICKERS PANEL */
 .stickers-panel { padding:0 14px 14px; display:none; }
 .stickers-panel.open { display:block; }
-
-.legend {
-  display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;
-  font-family:'Barlow Condensed',sans-serif; font-size:9px; letter-spacing:1px; text-transform:uppercase; color:#555;
-}
+.legend { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px; font-family:'Barlow Condensed',sans-serif; font-size:9px; letter-spacing:1px; text-transform:uppercase; color:#555; }
 .leg { display:flex; align-items:center; gap:4px; }
 .leg-dot { width:8px; height:8px; border-radius:2px; }
-
 .stickers-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin-bottom:10px; }
 
 /* STICKER SLOT */
@@ -444,18 +854,13 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   border-radius:7px; border:1.5px solid var(--border);
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   cursor:pointer; transition:all 0.15s; position:relative;
-  background:var(--surface2); padding:5px 3px; min-height:60px;
-  user-select:none;
+  background:var(--surface2); padding:5px 3px; min-height:60px; user-select:none;
 }
 .sticker:hover { border-color:var(--gold); transform:scale(1.06); z-index:2; }
-
-/* States */
 .sticker.got1 { background:linear-gradient(135deg,#0e1f0e,#091509); border-color:var(--green); }
 .sticker.got2 { background:linear-gradient(135deg,#102030,#081828); border-color:var(--blue); }
 .sticker.got3 { background:linear-gradient(135deg,#201008,#180a00); border-color:var(--orange); }
 .sticker.got4plus { background:linear-gradient(135deg,#200a20,#150015); border-color:#c060e0; }
-
-/* Types */
 .sticker.special { background:linear-gradient(135deg,#1a0808,#0e0000); border-color:#8a1010; }
 .sticker.special.got1 { border-color:var(--green); background:linear-gradient(135deg,#0e1f0e,#091509); }
 .sticker.special .s-code { color:#c04040; }
@@ -464,7 +869,6 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .sticker.shield.got1 { border-color:var(--green); background:linear-gradient(135deg,#0e1f0e,#091509); }
 .sticker.photo  { background:linear-gradient(135deg,#150a28,#0e0618); border-color:#5a3090; }
 .sticker.photo.got1  { border-color:var(--green); background:linear-gradient(135deg,#0e1f0e,#091509); }
-
 .s-code { font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:#888; line-height:1; }
 .got1 .s-code { color:var(--green); }
 .got2 .s-code { color:var(--blue); }
@@ -474,28 +878,20 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .shield.got1 .s-code { color:var(--green); }
 .photo .s-code { color:var(--nexo2); }
 .photo.got1 .s-code { color:var(--green); }
-
 .s-lbl { font-size:8px; color:#444; text-align:center; line-height:1.2; margin-top:2px; font-family:'Barlow Condensed',sans-serif; }
 .got1 .s-lbl { color:rgba(48,192,96,0.5); }
 .got2 .s-lbl { color:rgba(48,128,232,0.5); }
-
-/* COUNT BADGE on sticker */
 .s-count {
   position:absolute; top:3px; right:3px;
   background:var(--gold); color:#0a0a0f;
   font-family:'Bebas Neue',sans-serif; font-size:10px;
   width:16px; height:16px; border-radius:50%;
-  display:flex; align-items:center; justify-content:center;
-  line-height:1;
+  display:flex; align-items:center; justify-content:center; line-height:1;
 }
 .got2 .s-count { background:var(--blue); color:white; }
 .got3 .s-count { background:var(--orange); color:white; }
 .got4plus .s-count { background:#c060e0; color:white; }
-
-.sticker-actions {
-  display:flex; gap:3px; margin-top:4px; width:100%;
-}
-
+.sticker-actions { display:flex; gap:3px; margin-top:4px; width:100%; }
 .s-btn {
   flex:1; font-size:13px; background:rgba(255,255,255,0.05);
   border:none; border-radius:4px; cursor:pointer; padding:3px 0;
@@ -504,8 +900,6 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .s-btn:hover { background:rgba(255,255,255,0.12); color:var(--text); }
 .s-btn.minus:hover { background:rgba(224,48,48,0.2); color:var(--red); }
 .s-btn.plus:hover  { background:rgba(48,192,96,0.2);  color:var(--green); }
-
-/* QUICK ACTIONS */
 .quick-actions { display:flex; gap:8px; padding-top:8px; border-top:1px solid var(--border); }
 .quick-actions button {
   flex:1; font-family:'Barlow Condensed',sans-serif; font-size:10px; font-weight:600;
@@ -519,14 +913,12 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 
 /* ── TRADES TAB ──────────────────────────────────────────── */
 #tab-trades { display:none; }
-
 .trades-header {
   background:var(--surface2); border:1px solid var(--border); border-radius:10px;
   padding:16px 20px; margin-bottom:20px;
 }
 .trades-header h2 { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:3px; color:var(--gold); margin-bottom:4px; }
 .trades-header p  { font-size:13px; color:#666; line-height:1.5; }
-
 .refresh-btn {
   font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
   letter-spacing:2px; text-transform:uppercase; padding:7px 14px;
@@ -539,15 +931,11 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   background:var(--surface); border:1px solid var(--border); border-radius:10px;
   margin-bottom:16px; overflow:hidden;
 }
-
 .utc-header {
   padding:14px 16px; display:flex; align-items:center; gap:12px;
-  cursor:pointer; user-select:none;
-  border-bottom:1px solid transparent;
-  transition:border-color 0.2s;
+  cursor:pointer; user-select:none; border-bottom:1px solid transparent; transition:border-color 0.2s;
 }
 .utc-header.open { border-bottom-color:var(--border); }
-
 .utc-avatar {
   width:36px; height:36px; border-radius:50%;
   background:var(--surface2); border:2px solid var(--border);
@@ -555,51 +943,202 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   overflow:hidden; flex-shrink:0;
 }
 .utc-avatar img { width:100%; height:100%; object-fit:cover; }
-
 .utc-info { flex:1; }
 .utc-name { font-family:'Barlow Condensed',sans-serif; font-size:15px; font-weight:700; letter-spacing:1px; color:var(--text); }
 .utc-summary { font-size:11px; color:#666; margin-top:2px; font-family:'Barlow Condensed',sans-serif; letter-spacing:1px; }
-
 .utc-badges { display:flex; gap:6px; flex-shrink:0; }
-.badge {
-  font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px;
-  padding:3px 8px; border-radius:4px;
-}
+.badge { font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px; padding:3px 8px; border-radius:4px; }
 .badge-give { background:rgba(48,192,96,0.15); color:var(--green); border:1px solid rgba(48,192,96,0.3); }
 .badge-want { background:rgba(48,128,232,0.15); color:var(--blue);  border:1px solid rgba(48,128,232,0.3); }
-
 .utc-body { padding:14px 16px; display:none; }
 .utc-body.open { display:block; }
-
-.trade-section-title {
-  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700;
-  letter-spacing:2px; text-transform:uppercase; margin-bottom:8px;
-}
+.trade-section-title { font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700; letter-spacing:2px; text-transform:uppercase; margin-bottom:8px; }
 .trade-section-title.give { color:var(--green); }
 .trade-section-title.want { color:var(--blue); }
-
 .trade-chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:14px; }
-
-.chip {
-  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
-  letter-spacing:0.5px; padding:3px 8px; border-radius:4px; white-space:nowrap;
-}
+.chip { font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600; letter-spacing:0.5px; padding:3px 8px; border-radius:4px; white-space:nowrap; }
 .chip-give { background:rgba(48,192,96,0.1); color:var(--green); border:1px solid rgba(48,192,96,0.3); }
 .chip-want { background:rgba(48,128,232,0.1); color:var(--blue);  border:1px solid rgba(48,128,232,0.3); }
 .chip-count { font-size:9px; opacity:0.7; }
 .chip-holo { background:rgba(200,160,40,0.15); color:#d4a820; border:1px solid rgba(200,160,40,0.4); }
 .chip-holo-want { background:rgba(200,160,40,0.1); color:#c49010; border:1px solid rgba(200,160,40,0.3); }
-.chip-holo .chip-icon, .chip-holo-want .chip-icon { font-size:9px; }
-
 .no-trades { text-align:center; padding:40px 20px; color:#444; }
 .no-trades h3 { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:3px; color:#333; margin-bottom:6px; }
+
+/* ── CONTACT / MESSAGE BUTTON IN TRADE CARD ──────────────── */
+.utc-contact {
+  display:flex; align-items:center; gap:8px; margin-top:12px;
+  padding:10px 12px; background:var(--surface2); border-radius:8px; border:1px solid var(--border);
+}
+.utc-contact-icon { font-size:18px; }
+.utc-contact-info { flex:1; }
+.utc-contact-name { font-family:'Barlow Condensed',sans-serif; font-size:14px; font-weight:700; color:var(--text); }
+.utc-contact-phone { font-size:12px; color:#666; margin-top:1px; }
+.utc-contact-wa {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600; letter-spacing:1px;
+  padding:6px 12px; border-radius:6px; background:rgba(37,211,102,0.15); color:#25D366;
+  border:1px solid rgba(37,211,102,0.3); text-decoration:none; white-space:nowrap; transition:all 0.2s;
+}
+.utc-contact-wa:hover { background:rgba(37,211,102,0.25); }
+
+/* CHAT BUTTON */
+.btn-chat {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
+  letter-spacing:1px; padding:6px 14px; border-radius:6px; cursor:pointer;
+  background:rgba(160,96,240,0.15); color:var(--nexo); border:1px solid rgba(160,96,240,0.4);
+  transition:all 0.2s; white-space:nowrap; position:relative;
+}
+.btn-chat:hover { background:rgba(160,96,240,0.25); }
+.btn-chat .chat-unread {
+  position:absolute; top:-6px; right:-6px; background:var(--red); color:white;
+  font-family:'Bebas Neue',sans-serif; font-size:10px; min-width:16px; height:16px;
+  border-radius:8px; display:none; align-items:center; justify-content:center;
+  padding:0 3px; border:1.5px solid var(--bg);
+}
+
+/* ── CHAT MODAL ───────────────────────────────────────────── */
+.chat-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:800;
+  display:flex; align-items:center; justify-content:center; padding:16px;
+  opacity:0; pointer-events:none; transition:opacity 0.25s; backdrop-filter:blur(4px);
+}
+.chat-overlay.open { opacity:1; pointer-events:all; }
+
+.chat-modal {
+  background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  width:100%; max-width:500px; max-height:90vh;
+  display:flex; flex-direction:column;
+  transform:translateY(20px); transition:transform 0.25s;
+  box-shadow:0 24px 80px rgba(0,0,0,0.7);
+}
+.chat-overlay.open .chat-modal { transform:translateY(0); }
+
+.chat-header {
+  padding:16px 20px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between; flex-shrink:0;
+}
+.chat-close {
+  background:transparent; border:none; color:#555; font-size:20px;
+  cursor:pointer; transition:color 0.2s; padding:4px;
+}
+.chat-close:hover { color:var(--text); }
+
+/* Messages */
+.chat-messages {
+  flex:1; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:8px;
+  min-height:150px; max-height:280px;
+}
+.chat-bubble {
+  max-width:75%; display:flex; flex-direction:column;
+}
+.chat-bubble.me { align-self:flex-end; align-items:flex-end; }
+.chat-bubble.them { align-self:flex-start; align-items:flex-start; }
+.chat-text {
+  padding:9px 13px; border-radius:12px; font-size:13px; line-height:1.5;
+  word-break:break-word;
+}
+.chat-bubble.me .chat-text { background:linear-gradient(135deg,var(--nexo2),var(--nexo)); color:white; border-radius:12px 12px 3px 12px; }
+.chat-bubble.them .chat-text { background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:12px 12px 12px 3px; }
+.chat-time { font-size:10px; color:#444; margin-top:3px; font-family:'Barlow Condensed',sans-serif; }
+.chat-sys {
+  text-align:center; font-size:11px; color:#555; font-style:italic;
+  padding:6px 12px; background:rgba(255,255,255,0.03); border-radius:8px;
+  font-family:'Barlow Condensed',sans-serif; letter-spacing:0.5px;
+  border:1px solid rgba(255,255,255,0.04);
+}
+.chat-empty { text-align:center; color:#444; font-size:13px; padding:20px; }
+
+/* Chat input */
+.chat-input-row {
+  display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border); flex-shrink:0;
+}
+.chat-input-row input {
+  flex:1; background:var(--surface2); border:1px solid var(--border); border-radius:8px;
+  padding:9px 13px; color:var(--text); font-family:'Barlow',sans-serif; font-size:13px; outline:none;
+}
+.chat-input-row input:focus { border-color:var(--nexo); }
+.chat-input-row input::placeholder { color:#444; }
+.chat-send-btn {
+  background:linear-gradient(135deg,var(--nexo2),var(--nexo)); border:none;
+  border-radius:8px; padding:9px 16px; color:white; cursor:pointer; font-size:14px;
+  transition:all 0.2s; flex-shrink:0;
+}
+.chat-send-btn:hover { transform:scale(1.05); }
+
+/* Proposal area */
+.chat-proposal-area {
+  padding:12px 16px; border-top:1px solid var(--border); flex-shrink:0;
+}
+.proposal-card {
+  background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:14px;
+}
+.proposal-card-title {
+  font-family:'Barlow Condensed',sans-serif; font-size:12px; font-weight:700;
+  letter-spacing:2px; text-transform:uppercase; color:var(--nexo); margin-bottom:10px;
+}
+.proposal-row { margin-bottom:8px; }
+.proposal-row-label {
+  display:block; font-family:'Barlow Condensed',sans-serif; font-size:10px;
+  letter-spacing:1.5px; text-transform:uppercase; margin-bottom:5px;
+}
+.proposal-row-label.give { color:var(--green); }
+.proposal-row-label.want { color:var(--blue); }
+.proposal-actions { display:flex; gap:8px; margin-top:10px; }
+.proposal-actions button { flex:1; }
+.proposal-status {
+  font-family:'Barlow Condensed',sans-serif; font-size:12px; letter-spacing:1px;
+  text-align:center; padding:8px; border-radius:6px; margin-top:8px;
+}
+.proposal-status.pending  { background:rgba(160,96,240,0.1); color:var(--nexo); border:1px solid rgba(160,96,240,0.3); }
+.proposal-status.accepted { background:rgba(48,192,96,0.1); color:var(--green); border:1px solid rgba(48,192,96,0.3); }
+.proposal-status.declined { background:rgba(224,48,48,0.1); color:var(--red); border:1px solid rgba(224,48,48,0.3); }
+.proposal-status.completed{ background:rgba(48,192,96,0.15); color:var(--green); border:1px solid rgba(48,192,96,0.5); }
+
+/* ── PROPOSAL BUILDER MODAL ───────────────────────────────── */
+.pb-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:900;
+  display:flex; align-items:center; justify-content:center; padding:16px;
+  opacity:0; pointer-events:none; transition:opacity 0.2s; backdrop-filter:blur(6px);
+}
+.pb-overlay.open { opacity:1; pointer-events:all; }
+.pb-modal {
+  background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  width:100%; max-width:460px; max-height:85vh; overflow-y:auto; padding:24px;
+  transform:translateY(20px); transition:transform 0.2s;
+  box-shadow:0 24px 80px rgba(0,0,0,0.7);
+}
+.pb-overlay.open .pb-modal { transform:translateY(0); }
+
+.proposal-builder { }
+.pb-title { font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:3px; color:var(--gold); margin-bottom:4px; }
+.pb-sub { font-size:12px; color:#555; margin-bottom:20px; line-height:1.5; }
+.pb-section { margin-bottom:18px; }
+.pb-label {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700;
+  letter-spacing:2px; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between;
+}
+.pb-label.give { color:var(--green); }
+.pb-label.want { color:var(--blue); }
+.pb-count { font-size:10px; opacity:0.7; }
+.pb-chips { display:flex; flex-wrap:wrap; gap:6px; max-height:140px; overflow-y:auto; }
+.pb-chip {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
+  padding:4px 10px; border-radius:6px; cursor:pointer; transition:all 0.15s;
+  background:var(--surface2); border:1px solid var(--border); color:#666; letter-spacing:0.5px;
+  user-select:none;
+}
+.pb-chip:hover { border-color:#555; color:#aaa; }
+.pb-chip.selected { background:rgba(160,96,240,0.15); border-color:var(--nexo); color:var(--nexo); }
+.pb-empty { font-size:12px; color:#444; font-style:italic; padding:8px; }
+.pb-actions { display:flex; gap:10px; margin-top:20px; padding-top:16px; border-top:1px solid var(--border); }
+.pb-actions button { flex:1; }
 
 /* ── TOAST ───────────────────────────────────────────────── */
 .toast {
   position:fixed; bottom:20px; right:20px;
   background:var(--surface2); border:1px solid var(--border); border-radius:8px;
   padding:10px 16px; font-family:'Barlow Condensed',sans-serif; font-size:13px; letter-spacing:1px;
-  z-index:999; transform:translateY(60px); opacity:0; transition:all 0.3s; max-width:280px;
+  z-index:9999; transform:translateY(60px); opacity:0; transition:all 0.3s; max-width:280px;
 }
 .toast.show { transform:translateY(0); opacity:1; }
 
@@ -610,6 +1149,72 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 /* NO RESULTS */
 .no-res { text-align:center; padding:50px 20px; color:#444; }
 .no-res h3 { font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:3px; color:#333; }
+
+/* PRICE BANNER */
+.price-banner {
+  background: linear-gradient(135deg, #12100a, #1a1508); border: 1px solid rgba(200,160,40,0.3);
+  border-radius: 10px; padding: 14px 20px; margin-bottom: 16px;
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+}
+.price-banner-title { font-family:'Barlow Condensed',sans-serif; font-size:11px; letter-spacing:2px; text-transform:uppercase; color:#8a6a10; margin-bottom:8px; }
+.price-items { display:flex; gap:16px; flex-wrap:wrap; }
+.price-item { display:flex; align-items:center; gap:8px; background:rgba(200,160,40,0.08); border:1px solid rgba(200,160,40,0.2); border-radius:8px; padding:8px 14px; }
+.price-icon { font-size:18px; }
+.price-name { font-family:'Barlow Condensed',sans-serif; font-size:12px; color:#aaa; letter-spacing:1px; }
+.price-val  { font-family:'Bebas Neue',sans-serif; font-size:22px; color:#d4a820; letter-spacing:1px; line-height:1; }
+.price-note { font-size:10px; color:#555; margin-top:2px; font-family:'Barlow Condensed',sans-serif; }
+
+/* MODE BADGE */
+.mode-badge { display:inline-flex; align-items:center; gap:5px; font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600; letter-spacing:1.5px; text-transform:uppercase; padding:3px 10px; border-radius:20px; flex-shrink:0; }
+.mode-swap { background:rgba(48,192,96,0.12); color:var(--green); border:1px solid rgba(48,192,96,0.3); }
+.mode-both { background:rgba(160,96,240,0.12); color:var(--nexo); border:1px solid rgba(160,96,240,0.3); }
+
+/* ONBOARDING MODAL */
+.onboarding-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:600;
+  display:flex; align-items:center; justify-content:center; padding:20px; backdrop-filter:blur(6px);
+}
+.onboarding-box {
+  background:var(--surface); border:1px solid var(--border); border-radius:20px;
+  padding:32px; max-width:440px; width:100%; box-shadow:0 24px 80px rgba(0,0,0,0.7);
+}
+.onboarding-box .ob-icon { width:56px; height:56px; background:linear-gradient(135deg, var(--nexo2), var(--nexo)); border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:26px; margin-bottom:16px; }
+.onboarding-box h2 { font-family:'Bebas Neue',sans-serif; font-size:26px; letter-spacing:4px; color:white; margin-bottom:4px; }
+.onboarding-box .ob-sub { font-size:13px; color:#666; margin-bottom:24px; line-height:1.5; }
+.ob-step { font-family:'Barlow Condensed',sans-serif; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:var(--nexo); margin-bottom:16px; }
+.mode-selector { display:flex; gap:10px; margin-top:6px; }
+.mode-opt { flex:1; padding:12px 8px; border-radius:10px; border:2px solid var(--border); background:var(--surface2); cursor:pointer; text-align:center; transition:all 0.2s; }
+.mode-opt:hover { border-color:#555; }
+.mode-opt.selected { border-color:var(--nexo); background:rgba(160,96,240,0.08); }
+.mode-opt .mo-icon { font-size:22px; margin-bottom:6px; }
+.mode-opt .mo-name { font-family:'Barlow Condensed',sans-serif; font-size:13px; font-weight:700; letter-spacing:1px; color:var(--text); display:block; }
+.mode-opt .mo-desc { font-size:11px; color:#555; margin-top:2px; }
+.mode-opt.selected .mo-name { color:var(--nexo); }
+
+/* MODAL PERFIL */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:500;
+  display:flex; align-items:center; justify-content:center; padding:20px;
+  opacity:0; pointer-events:none; transition:opacity 0.25s; backdrop-filter:blur(4px);
+}
+.modal-overlay.open { opacity:1; pointer-events:all; }
+.modal {
+  background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  padding:28px; max-width:420px; width:100%;
+  transform:translateY(20px); transition:transform 0.25s; box-shadow:0 20px 60px rgba(0,0,0,0.6);
+}
+.modal-overlay.open .modal { transform:translateY(0); }
+.modal h2 { font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:3px; color:var(--gold); margin-bottom:4px; }
+.modal p.modal-sub { font-size:12px; color:#555; margin-bottom:24px; letter-spacing:0.5px; }
+.form-group { margin-bottom:16px; }
+.form-group label { display:block; font-family:'Barlow Condensed',sans-serif; font-size:11px; letter-spacing:2px; text-transform:uppercase; color:#777; margin-bottom:6px; }
+.form-group input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; color:var(--text); font-family:'Barlow',sans-serif; font-size:14px; outline:none; transition:border-color 0.2s; }
+.form-group input:focus { border-color:var(--nexo); }
+.form-group input::placeholder { color:#444; }
+.modal-actions { display:flex; gap:10px; margin-top:20px; }
+.modal-actions button { flex:1; }
+.profile-btn { display:flex; align-items:center; gap:8px; background:transparent; border:1px solid var(--border); border-radius:20px; padding:4px 12px 4px 4px; cursor:pointer; transition:border-color 0.2s; }
+.profile-btn:hover { border-color:var(--nexo); }
 
 /* RESPONSIVE */
 @media(max-width:600px){
@@ -622,189 +1227,11 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   .stats-bar { gap:14px; padding:12px; }
   .stat-n { font-size:24px; }
   #user-name { display:none; }
+  .chat-modal { max-height:95vh; }
 }
-
 ::-webkit-scrollbar { width:5px; }
 ::-webkit-scrollbar-track { background:var(--bg); }
 ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
-
-/* ── PRICE BANNER ─────────────────────────────────────────── */
-.price-banner {
-  background: linear-gradient(135deg, #12100a, #1a1508);
-  border: 1px solid rgba(200,160,40,0.3);
-  border-radius: 10px;
-  padding: 14px 20px;
-  margin-bottom: 16px;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
-}
-.price-banner-title {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 11px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: #8a6a10;
-  margin-bottom: 8px;
-}
-.price-items { display: flex; gap: 16px; flex-wrap: wrap; }
-.price-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(200,160,40,0.08);
-  border: 1px solid rgba(200,160,40,0.2);
-  border-radius: 8px;
-  padding: 8px 14px;
-}
-.price-icon { font-size: 18px; }
-.price-info {}
-.price-name { font-family: 'Barlow Condensed', sans-serif; font-size: 12px; color: #aaa; letter-spacing: 1px; }
-.price-val  { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #d4a820; letter-spacing: 1px; line-height: 1; }
-.price-note { font-size: 10px; color: #555; margin-top: 2px; font-family: 'Barlow Condensed', sans-serif; }
-
-/* ── MODE BADGE ────────────────────────────────────────────── */
-.mode-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  padding: 3px 10px;
-  border-radius: 20px;
-  flex-shrink: 0;
-}
-.mode-swap { background: rgba(48,192,96,0.12); color: var(--green); border: 1px solid rgba(48,192,96,0.3); }
-.mode-both { background: rgba(160,96,240,0.12); color: var(--nexo); border: 1px solid rgba(160,96,240,0.3); }
-
-/* ── ONBOARDING MODAL ──────────────────────────────────────── */
-.onboarding-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.92);
-  z-index: 600;
-  display: flex; align-items: center; justify-content: center;
-  padding: 20px;
-  backdrop-filter: blur(6px);
-}
-.onboarding-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 32px;
-  max-width: 440px;
-  width: 100%;
-  box-shadow: 0 24px 80px rgba(0,0,0,0.7);
-}
-.onboarding-box .ob-icon {
-  width: 56px; height: 56px;
-  background: linear-gradient(135deg, var(--nexo2), var(--nexo));
-  border-radius: 14px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 26px;
-  margin-bottom: 16px;
-}
-.onboarding-box h2 {
-  font-family: 'Bebas Neue', sans-serif;
-  font-size: 26px; letter-spacing: 4px;
-  color: white; margin-bottom: 4px;
-}
-.onboarding-box .ob-sub {
-  font-size: 13px; color: #666; margin-bottom: 24px; line-height: 1.5;
-}
-.ob-step {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
-  color: var(--nexo); margin-bottom: 16px;
-}
-.mode-selector { display: flex; gap: 10px; margin-top: 6px; }
-.mode-opt {
-  flex: 1; padding: 12px 8px; border-radius: 10px;
-  border: 2px solid var(--border);
-  background: var(--surface2);
-  cursor: pointer; text-align: center;
-  transition: all 0.2s;
-}
-.mode-opt:hover { border-color: #555; }
-.mode-opt.selected { border-color: var(--nexo); background: rgba(160,96,240,0.08); }
-.mode-opt .mo-icon { font-size: 22px; margin-bottom: 6px; }
-.mode-opt .mo-name {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 13px; font-weight: 700; letter-spacing: 1px;
-  color: var(--text); display: block;
-}
-.mode-opt .mo-desc { font-size: 11px; color: #555; margin-top: 2px; }
-.mode-opt.selected .mo-name { color: var(--nexo); }
-
-/* ── MODAL PERFIL ─────────────────────────────────────────── */
-.modal-overlay {
-  position:fixed; inset:0; background:rgba(0,0,0,0.75);
-  z-index:500; display:flex; align-items:center; justify-content:center;
-  padding:20px; backdrop-filter:blur(4px);
-  opacity:0; pointer-events:none; transition:opacity 0.25s;
-}
-.modal-overlay.open { opacity:1; pointer-events:all; }
-
-.modal {
-  background:var(--surface); border:1px solid var(--border); border-radius:16px;
-  padding:28px; max-width:420px; width:100%;
-  transform:translateY(20px); transition:transform 0.25s;
-  box-shadow:0 20px 60px rgba(0,0,0,0.6);
-}
-.modal-overlay.open .modal { transform:translateY(0); }
-
-.modal h2 {
-  font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:3px;
-  color:var(--gold); margin-bottom:4px;
-}
-.modal p.modal-sub { font-size:12px; color:#555; margin-bottom:24px; letter-spacing:0.5px; }
-
-.form-group { margin-bottom:16px; }
-.form-group label {
-  display:block; font-family:'Barlow Condensed',sans-serif; font-size:11px;
-  letter-spacing:2px; text-transform:uppercase; color:#777; margin-bottom:6px;
-}
-.form-group input {
-  width:100%; background:var(--surface2); border:1px solid var(--border);
-  border-radius:8px; padding:10px 14px; color:var(--text);
-  font-family:'Barlow',sans-serif; font-size:14px; outline:none;
-  transition:border-color 0.2s;
-}
-.form-group input:focus { border-color:var(--nexo); }
-.form-group input::placeholder { color:#444; }
-
-.modal-actions { display:flex; gap:10px; margin-top:20px; }
-.modal-actions button { flex:1; }
-
-/* Profile pill in header */
-.profile-btn {
-  display:flex; align-items:center; gap:8px;
-  background:transparent; border:1px solid var(--border);
-  border-radius:20px; padding:4px 12px 4px 4px;
-  cursor:pointer; transition:border-color 0.2s;
-}
-.profile-btn:hover { border-color:var(--nexo); }
-
-/* Contact info in trade card */
-.utc-contact {
-  display:flex; align-items:center; gap:8px; margin-top:12px;
-  padding:10px 12px; background:var(--surface2); border-radius:8px;
-  border:1px solid var(--border);
-}
-.utc-contact-icon { font-size:18px; }
-.utc-contact-info { flex:1; }
-.utc-contact-name { font-family:'Barlow Condensed',sans-serif; font-size:14px; font-weight:700; color:var(--text); }
-.utc-contact-phone { font-size:12px; color:#666; margin-top:1px; }
-.utc-contact-wa {
-  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:600;
-  letter-spacing:1px; padding:6px 12px; border-radius:6px;
-  background:rgba(37,211,102,0.15); color:#25D366; border:1px solid rgba(37,211,102,0.3);
-  text-decoration:none; white-space:nowrap; transition:all 0.2s;
-}
-.utc-contact-wa:hover { background:rgba(37,211,102,0.25); }
 </style>
 </head>
 <body>
@@ -857,6 +1284,11 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
         <div class="prog-track"><div class="prog-fill" id="hdr-bar" style="width:0%"></div></div>
       </div>
       <div class="user-area">
+        <!-- Notification bell -->
+        <button class="notif-btn" onclick="switchTab('trades', document.querySelectorAll('.tab')[1])" title="Intercambios y mensajes">
+          💬
+          <div id="notif-badge">0</div>
+        </button>
         <button class="profile-btn" onclick="openProfile()">
           <img id="user-photo" src="" alt="" style="display:none;width:28px;height:28px;border-radius:50%;object-fit:cover;">
           <span id="user-name" style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#aaa;letter-spacing:1px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
@@ -886,10 +1318,8 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
       <button class="filter-btn" onclick="setFilter('dups',this)">Repetidas</button>
       <button class="filter-btn" onclick="setFilter('complete',this)">Completos</button>
     </div>
-
     <div class="main">
       <div class="stats-bar">
-        <!-- Nexo brand mark -->
         <div style="display:flex;align-items:center;gap:10px;margin-right:8px;">
           <svg width="32" height="32" viewBox="0 0 80 80">
             <rect width="80" height="80" rx="16" fill="#1a1a2a"/>
@@ -911,7 +1341,6 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
         <div class="stat-div"></div>
         <div class="stat"><span class="stat-n"       id="s-pct">0%</span><span class="stat-l">Progreso</span></div>
       </div>
-
       <div id="content"></div>
     </div>
   </div>
@@ -920,7 +1349,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
   <div id="tab-trades" class="main" style="padding-top:16px;">
     <div class="trades-header">
       <h2>🔄 Intercambios</h2>
-      <p>Aquí ves quién tiene repetidas que a ti te faltan, y quién necesita lo que a ti te sobra. ¡Coordina tus intercambios!</p>
+      <p>Aquí ves quién tiene repetidas que a ti te faltan, y quién necesita lo que a ti te sobra. Pulsa 💬 para abrir el chat y proponer un intercambio directamente.</p>
       <button class="refresh-btn" onclick="loadAllUsersData().then(renderTrades)">↻ Actualizar</button>
     </div>
 
@@ -951,86 +1380,108 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
     <div id="trades-content"><p style="color:#555;text-align:center;padding:40px">Cargando usuarios...</p></div>
   </div>
 
-
-<!-- ══ ONBOARDING MODAL (primer acceso / perfil incompleto) ══ -->
-<div class="onboarding-overlay" id="onboarding-modal" style="display:none;">
-  <div class="onboarding-box">
-    <div class="ob-icon">👋</div>
-    <div class="ob-step">Bienvenido a Nexo · Paso 1 de 1</div>
-    <h2>Tu Perfil</h2>
-    <p class="ob-sub">Antes de continuar necesitamos algunos datos para que puedas coordinar intercambios con otros coleccionistas.</p>
-    <div class="form-group">
-      <label>Nombre para mostrar *</label>
-      <input type="text" id="ob-name" placeholder="Ej: Carlos G." maxlength="40">
-    </div>
-    <div class="form-group">
-      <label>WhatsApp *</label>
-      <input type="tel" id="ob-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
-    </div>
-    <div class="form-group">
-      <label>Ciudad *</label>
-      <input type="text" id="ob-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
-    </div>
-    <div class="form-group">
-      <label>¿Cómo quieres participar?</label>
-      <div class="mode-selector">
-        <div class="mode-opt" id="mode-swap" onclick="selectMode('swap')">
-          <div class="mo-icon">🔄</div>
-          <span class="mo-name">Solo cambios</span>
-          <div class="mo-desc">Intercambio estampa por estampa</div>
-        </div>
-        <div class="mode-opt" id="mode-both" onclick="selectMode('both')">
-          <div class="mo-icon">💰</div>
-          <span class="mo-name">Compra, venta y cambios</span>
-          <div class="mo-desc">Compro, vendo e intercambio</div>
+  <!-- ══ ONBOARDING MODAL ══════════════════════════════════════ -->
+  <div class="onboarding-overlay" id="onboarding-modal" style="display:none;">
+    <div class="onboarding-box">
+      <div class="ob-icon">👋</div>
+      <div class="ob-step">Bienvenido a Nexo · Paso 1 de 1</div>
+      <h2>Tu Perfil</h2>
+      <p class="ob-sub">Antes de continuar necesitamos algunos datos para que puedas coordinar intercambios con otros coleccionistas.</p>
+      <div class="form-group">
+        <label>Nombre para mostrar *</label>
+        <input type="text" id="ob-name" placeholder="Ej: Carlos G." maxlength="40">
+      </div>
+      <div class="form-group">
+        <label>WhatsApp *</label>
+        <input type="tel" id="ob-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
+      </div>
+      <div class="form-group">
+        <label>Ciudad *</label>
+        <input type="text" id="ob-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
+      </div>
+      <div class="form-group">
+        <label>¿Cómo quieres participar?</label>
+        <div class="mode-selector">
+          <div class="mode-opt" id="mode-swap" onclick="selectMode('swap')">
+            <div class="mo-icon">🔄</div>
+            <span class="mo-name">Solo cambios</span>
+            <div class="mo-desc">Intercambio estampa por estampa</div>
+          </div>
+          <div class="mode-opt" id="mode-both" onclick="selectMode('both')">
+            <div class="mo-icon">💰</div>
+            <span class="mo-name">Compra, venta y cambios</span>
+            <div class="mo-desc">Compro, vendo e intercambio</div>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="modal-actions" style="margin-top:24px;">
-      <button class="btn btn-gold" style="width:100%;padding:14px;" onclick="saveOnboarding()">Entrar a Nexo →</button>
-    </div>
-  </div>
-</div>
-
-<!-- ══ MODAL PERFIL ══════════════════════════════════════════ -->
-<div class="modal-overlay" id="profile-modal">
-  <div class="modal">
-    <h2>Mi Perfil</h2>
-    <p class="modal-sub">Tus datos de contacto son visibles para los demás al buscar intercambios</p>
-    <div class="form-group">
-      <label>Nombre para mostrar</label>
-      <input type="text" id="profile-name" placeholder="Ej: Carlos G." maxlength="40">
-    </div>
-    <div class="form-group">
-      <label>WhatsApp / Teléfono</label>
-      <input type="tel" id="profile-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
-    </div>
-    <div class="form-group">
-      <label>Ciudad</label>
-      <input type="text" id="profile-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
-    </div>
-    <div class="form-group">
-      <label>¿Cómo participas?</label>
-      <div class="mode-selector">
-        <div class="mode-opt" id="pmode-swap" onclick="selectProfileMode('swap')">
-          <div class="mo-icon">🔄</div>
-          <span class="mo-name">Solo cambios</span>
-          <div class="mo-desc">Intercambio estampa por estampa</div>
-        </div>
-        <div class="mode-opt" id="pmode-both" onclick="selectProfileMode('both')">
-          <div class="mo-icon">💰</div>
-          <span class="mo-name">Compra, venta y cambios</span>
-          <div class="mo-desc">Compro, vendo e intercambio</div>
-        </div>
+      <div class="modal-actions" style="margin-top:24px;">
+        <button class="btn btn-gold" style="width:100%;padding:14px;" onclick="saveOnboarding()">Entrar a Nexo →</button>
       </div>
     </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeProfile()">Cancelar</button>
-      <button class="btn btn-gold" onclick="saveProfile()">💾 Guardar</button>
+  </div>
+
+  <!-- ══ MODAL PERFIL ══════════════════════════════════════════ -->
+  <div class="modal-overlay" id="profile-modal">
+    <div class="modal">
+      <h2>Mi Perfil</h2>
+      <p class="modal-sub">Tus datos de contacto son visibles para los demás al buscar intercambios</p>
+      <div class="form-group">
+        <label>Nombre para mostrar</label>
+        <input type="text" id="profile-name" placeholder="Ej: Carlos G." maxlength="40">
+      </div>
+      <div class="form-group">
+        <label>WhatsApp / Teléfono</label>
+        <input type="tel" id="profile-phone" placeholder="Ej: +52 477 123 4567" maxlength="20">
+      </div>
+      <div class="form-group">
+        <label>Ciudad</label>
+        <input type="text" id="profile-city" placeholder="Ej: Irapuato, Guanajuato" maxlength="40">
+      </div>
+      <div class="form-group">
+        <label>¿Cómo participas?</label>
+        <div class="mode-selector">
+          <div class="mode-opt" id="pmode-swap" onclick="selectProfileMode('swap')">
+            <div class="mo-icon">🔄</div>
+            <span class="mo-name">Solo cambios</span>
+            <div class="mo-desc">Intercambio estampa por estampa</div>
+          </div>
+          <div class="mode-opt" id="pmode-both" onclick="selectProfileMode('both')">
+            <div class="mo-icon">💰</div>
+            <span class="mo-name">Compra, venta y cambios</span>
+            <div class="mo-desc">Compro, vendo e intercambio</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeProfile()">Cancelar</button>
+        <button class="btn btn-gold" onclick="saveProfile()">💾 Guardar</button>
+      </div>
     </div>
   </div>
-</div>
+
 </div><!-- /app -->
+
+<!-- ══ CHAT MODAL ════════════════════════════════════════════ -->
+<div class="chat-overlay" id="chat-modal">
+  <div class="chat-modal">
+    <div class="chat-header">
+      <div id="chat-modal-title"></div>
+      <button class="chat-close" onclick="closeChat()">✕</button>
+    </div>
+    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-proposal-area" id="chat-proposal-area"></div>
+    <div class="chat-input-row">
+      <input type="text" id="chat-input" placeholder="Escribe un mensaje…"
+        onkeydown="if(event.key==='Enter')sendMessage()">
+      <button class="chat-send-btn" onclick="sendMessage()">➤</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PROPOSAL BUILDER MODAL ════════════════════════════════ -->
+<div class="pb-overlay" id="pb-modal">
+  <div class="pb-modal" id="pb-modal-content"></div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -1051,9 +1502,7 @@ function makeTeamStickers(code) {
 }
 
 function makeIntroStickers() {
-  // Primera estampa especial: código "00 1"
   const stickers = [{ code: '00 1', num: 0, lbl: 'Portada Oficial', type: 'intro' }];
-  // Resto: FWC 1 – FWC 19
   const labels = [
     'Presentación','Historia Copa','FIFA Trophy',
     'Sede USA','Sede México','Sede Canadá',
@@ -1081,10 +1530,10 @@ const SECTIONS = [
   { id:'RSA', name:'Sudáfrica',       code:'RSA', flag:'🇿🇦', group:'Grupo A', stickers: makeTeamStickers('RSA') },
   { id:'KOR', name:'Corea del Sur',   code:'KOR', flag:'🇰🇷', group:'Grupo A', stickers: makeTeamStickers('KOR') },
   { id:'CZE', name:'Chequia',         code:'CZE', flag:'🇨🇿', group:'Grupo A', stickers: makeTeamStickers('CZE') },
-  { id:'CAN', name:'Canadá',                code:'CAN', flag:'🇨🇦', group:'Grupo B', stickers: makeTeamStickers('CAN') },
-  { id:'BIH', name:'Bosnia y Herzegovina',  code:'BIH', flag:'🇧🇦', group:'Grupo B', stickers: makeTeamStickers('BIH') },
-  { id:'QAT', name:'Qatar',                 code:'QAT', flag:'🇶🇦', group:'Grupo B', stickers: makeTeamStickers('QAT') },
-  { id:'SUI', name:'Suiza',                 code:'SUI', flag:'🇨🇭', group:'Grupo B', stickers: makeTeamStickers('SUI') },
+  { id:'CAN', name:'Canadá',          code:'CAN', flag:'🇨🇦', group:'Grupo B', stickers: makeTeamStickers('CAN') },
+  { id:'BIH', name:'Bosnia y Herzegovina', code:'BIH', flag:'🇧🇦', group:'Grupo B', stickers: makeTeamStickers('BIH') },
+  { id:'QAT', name:'Qatar',           code:'QAT', flag:'🇶🇦', group:'Grupo B', stickers: makeTeamStickers('QAT') },
+  { id:'SUI', name:'Suiza',           code:'SUI', flag:'🇨🇭', group:'Grupo B', stickers: makeTeamStickers('SUI') },
   { id:'BRA', name:'Brasil',    code:'BRA', flag:'🇧🇷', group:'Grupo C', stickers: makeTeamStickers('BRA') },
   { id:'MAR', name:'Marruecos', code:'MAR', flag:'🇲🇦', group:'Grupo C', stickers: makeTeamStickers('MAR') },
   { id:'HAI', name:'Haití',     code:'HAI', flag:'🇭🇹', group:'Grupo C', stickers: makeTeamStickers('HAI') },
@@ -1128,16 +1577,13 @@ const SECTIONS = [
 ];
 
 const TOTAL = SECTIONS.reduce((s, sec) => s + sec.stickers.length, 0);
-// All sticker codes for quick lookup
 const ALL_CODES = new Set(SECTIONS.flatMap(s => s.stickers.map(st => st.code)));
 
 // ═══════════════════════════════════════════════════════════════
 // STATE
-// collected = { "MEX 1": 2, "MEX 2": 0, "BRA 5": 1, ... }
-// value = number of copies owned (0 = missing, 1 = have it, 2+ = duplicates)
 // ═══════════════════════════════════════════════════════════════
-window.collected   = {};   // populated by Firebase listener
-window.allUsersData = {};  // other users' data
+window.collected   = {};
+window.allUsersData = {};
 
 let currentFilter  = 'all';
 let openSections   = new Set();
@@ -1149,10 +1595,9 @@ function persist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     window._saveToCloud(window.collected).catch(e => console.error(e));
-  }, 800); // debounce 800ms to avoid hammering Firestore
+  }, 800);
 }
 
-// +1 to a sticker
 function addSticker(key) {
   window.collected[key] = (window.collected[key] || 0) + 1;
   refreshSlot(key);
@@ -1161,7 +1606,6 @@ function addSticker(key) {
   persist();
 }
 
-// -1 to a sticker (min 0)
 function removeSticker(key) {
   const cur = window.collected[key] || 0;
   if (cur <= 0) return;
@@ -1215,7 +1659,6 @@ function applySlotClass(el, n, type) {
   else if (n === 2) el.classList.add('got2');
   else if (n === 3) el.classList.add('got3');
   else if (n >= 4)  el.classList.add('got4plus');
-  // Keep type classes
   el.classList.remove('shield','photo','special');
   if (type === 'shield')  el.classList.add('shield');
   if (type === 'photo')   el.classList.add('photo');
@@ -1389,12 +1832,9 @@ function togglePanel(code) {
 // ═══════════════════════════════════════════════════════════════
 // RENDER TRADES
 // ═══════════════════════════════════════════════════════════════
-// Detect if a sticker code is a hologram (shield pos 1, intro section 00/FWC)
 function isHolo(code) {
   if (!code) return false;
-  // Full intro section: 00 1 and FWC 1-19
   if (code.startsWith('00 ') || code.startsWith('FWC ')) return true;
-  // Shield = position 1 of any team (e.g. "MEX 1", "BRA 1")
   const parts = code.split(' ');
   if (parts.length === 2 && parts[1] === '1') return true;
   return false;
@@ -1412,47 +1852,38 @@ window.renderTrades = function() {
     return;
   }
 
-  // My missing & my duplicates
   const myMissing = new Set();
   const myDups    = {};
   for (const sec of SECTIONS) {
     for (const st of sec.stickers) {
       const n = getCount(st.code);
       if (n === 0) myMissing.add(st.code);
-      if (n > 1)   myDups[st.code] = n - 1; // extras I have
+      if (n > 1)   myDups[st.code] = n - 1;
     }
   }
 
   let html = '';
-
   for (const uid of uids) {
     const udata     = users[uid];
     const uStickers = udata.stickers || {};
     const uName     = udata.displayName || udata.email || 'Usuario';
     const uPhoto    = udata.photoURL || null;
 
-    // What they have duplicated that I need
     const theyCanGive = [];
-    // What they're missing that I have extra
     const theyNeed    = [];
 
     for (const code of ALL_CODES) {
       const theirCount = uStickers[code] || 0;
       const myCount    = getCount(code);
-
-      // They have extras of something I'm missing
-      if (theirCount > 1 && myMissing.has(code)) {
-        theyCanGive.push({ code, extras: theirCount - 1 });
-      }
-      // I have extras of something they're missing
-      if (myCount > 1 && theirCount === 0) {
-        theyNeed.push({ code, extras: myCount - 1 });
-      }
+      if (theirCount > 1 && myMissing.has(code)) theyCanGive.push({ code, extras: theirCount - 1 });
+      if (myCount > 1 && theirCount === 0)       theyNeed.push({ code, extras: myCount - 1 });
     }
 
     if (theyCanGive.length === 0 && theyNeed.length === 0) continue;
 
     const openId = `utc-${uid.slice(0,8)}`;
+    const unreadCount = (window._chatUnreadMap || {})[uid] || 0;
+
     html += `
     <div class="user-trades-card">
       <div class="utc-header" onclick="toggleUtc('${openId}')">
@@ -1483,9 +1914,7 @@ window.renderTrades = function() {
       html += `<div class="trade-section-title give">✅ Ellos tienen repetidas que a ti te faltan (${theyCanGive.length})</div><div class="trade-chips">`;
       for (const { code, extras } of theyCanGive) {
         const holo = isHolo(code);
-        const cls  = holo ? 'chip chip-holo' : 'chip chip-give';
-        const icon = holo ? '<span class="chip-icon">✨</span> ' : '';
-        html += `<div class="${cls}">${icon}${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
+        html += `<div class="${holo?'chip chip-holo':'chip chip-give'}">${holo?'<span class="chip-icon">✨</span> ':''}${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
       }
       html += `</div>`;
     }
@@ -1494,21 +1923,17 @@ window.renderTrades = function() {
       html += `<div class="trade-section-title want">🔵 Tú tienes repetidas que a ellos les faltan (${theyNeed.length})</div><div class="trade-chips">`;
       for (const { code, extras } of theyNeed) {
         const holo = isHolo(code);
-        const cls  = holo ? 'chip chip-holo-want' : 'chip chip-want';
-        const icon = holo ? '<span class="chip-icon">✨</span> ' : '';
-        html += `<div class="${cls}">${icon}${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
+        html += `<div class="${holo?'chip chip-holo-want':'chip chip-want'}">${holo?'<span class="chip-icon">✨</span> ':''}${code} ${extras > 1 ? `<span class="chip-count">×${extras}</span>` : ''}</div>`;
       }
       html += `</div>`;
     }
 
-    // Contact info block
+    // Contact + Chat button
     const uProfile = udata.profile || {};
     const contactName  = uProfile.nickname || uName;
     const contactPhone = uProfile.phone || '';
     const contactCity  = uProfile.city  || '';
-    const waLink = contactPhone
-      ? `https://wa.me/${contactPhone.replace(/[^0-9]/g,'')}`
-      : '';
+    const waLink = contactPhone ? `https://wa.me/${contactPhone.replace(/[^0-9]/g,'')}` : '';
 
     html += `<div class="utc-contact">
       <div class="utc-contact-icon">📱</div>
@@ -1517,14 +1942,18 @@ window.renderTrades = function() {
         <div class="utc-contact-phone">${contactPhone || '<span style="color:#444;font-style:italic">Sin teléfono registrado</span>'}</div>
       </div>
       ${waLink ? `<a class="utc-contact-wa" href="${waLink}" target="_blank">WhatsApp 💬</a>` : ''}
+      <button class="btn-chat" onclick="openChat('${uid}');event.stopPropagation()">
+        💬 Mensaje
+        ${unreadCount > 0 ? `<span class="chat-unread" style="display:flex">${unreadCount}</span>` : '<span class="chat-unread"></span>'}
+      </button>
     </div>`;
+
     html += `</div></div>`;
   }
 
   if (!html) {
     html = `<div class="no-trades"><h3>Sin intercambios posibles</h3><p style="color:#555;font-size:13px">Ningún amigo tiene repetidas que te falten, o viceversa. ¡Sigan abriendo sobres!</p></div>`;
   }
-
   container.innerHTML = html;
 };
 
@@ -1564,7 +1993,6 @@ function exportPDF() {
   const drawBg = () => { doc.setFillColor(10,10,15); doc.rect(0,0,W,H,'F'); };
   drawBg();
 
-  // Header
   doc.setFillColor(12,8,20); doc.rect(0,0,W,28,'F');
   doc.setFillColor(160,96,240); doc.rect(0,27,W,1.5,'F');
   doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(160,96,240);
@@ -1618,7 +2046,6 @@ function exportPDF() {
     y += 2;
   }
 
-  // Footers
   const pages = doc.getNumberOfPages();
   for (let i=1; i<=pages; i++) {
     doc.setPage(i); doc.setFillColor(12,10,20); doc.rect(0,H-9,W,9,'F');
@@ -1665,15 +2092,12 @@ window.updateStats = updateStats;
 // PERFIL DE USUARIO
 // ═══════════════════════════════════════════════════════════════
 window.userProfile = {};
-
-// ── ONBOARDING ────────────────────────────────────────────────
 let selectedMode = '';
 let selectedProfileMode = '';
 
 function showOnboarding(existingProfile) {
   const ob = document.getElementById('onboarding-modal');
   if (!ob) return;
-  // Pre-fill if editing
   if (existingProfile.nickname) document.getElementById('ob-name').value  = existingProfile.nickname;
   if (existingProfile.phone)    document.getElementById('ob-phone').value = existingProfile.phone;
   if (existingProfile.city)     document.getElementById('ob-city').value  = existingProfile.city;
@@ -1692,30 +2116,24 @@ async function saveOnboarding() {
   const phone    = document.getElementById('ob-phone').value.trim();
   const city     = document.getElementById('ob-city').value.trim();
   const mode     = selectedMode;
-
   if (!nickname) { showToast('⚠️ Escribe tu nombre'); return; }
   if (!phone)    { showToast('⚠️ Escribe tu WhatsApp'); return; }
   if (!city)     { showToast('⚠️ Escribe tu ciudad'); return; }
   if (!mode)     { showToast('⚠️ Elige cómo quieres participar'); return; }
-
   window.userProfile = { nickname, phone, city, mode };
   const n = document.getElementById('user-name');
   if (n) n.textContent = nickname;
-
   try {
     await window._saveProfileToCloud({ nickname, phone, city, mode });
     document.getElementById('onboarding-modal').style.display = 'none';
     showToast('✅ ¡Bienvenido a Nexo!');
-  } catch(e) {
-    showToast('❌ Error al guardar, intenta de nuevo');
-  }
+  } catch(e) { showToast('❌ Error al guardar, intenta de nuevo'); }
 }
 
 window.showOnboarding  = showOnboarding;
 window.selectMode      = selectMode;
 window.saveOnboarding  = saveOnboarding;
 
-// ── PROFILE MODAL ─────────────────────────────────────────────
 function openProfile() {
   const p = window.userProfile || {};
   document.getElementById('profile-name').value  = p.nickname || '';
@@ -1742,34 +2160,34 @@ async function saveProfile() {
   const phone    = document.getElementById('profile-phone').value.trim();
   const city     = document.getElementById('profile-city').value.trim();
   const mode     = selectedProfileMode || window.userProfile.mode || '';
-
   if (!nickname) { showToast('⚠️ Escribe tu nombre'); return; }
   if (!phone)    { showToast('⚠️ Escribe tu WhatsApp'); return; }
   if (!city)     { showToast('⚠️ Escribe tu ciudad'); return; }
   if (!mode)     { showToast('⚠️ Elige cómo quieres participar'); return; }
-
   window.userProfile = { nickname, phone, city, mode };
   const n = document.getElementById('user-name');
   if (n) n.textContent = nickname;
-
   try {
     await window._saveProfileToCloud({ nickname, phone, city, mode });
     showToast('✅ Perfil actualizado');
-  } catch(e) {
-    showToast('❌ Error al guardar perfil');
-  }
+  } catch(e) { showToast('❌ Error al guardar perfil'); }
   closeProfile();
 }
 
 document.getElementById('profile-modal').addEventListener('click', function(e) {
   if (e.target === this) closeProfile();
 });
+document.getElementById('chat-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeChat();
+});
+document.getElementById('pb-modal').addEventListener('click', function(e) {
+  if (e.target === this) closePbModal();
+});
 
 window.openProfile      = openProfile;
 window.closeProfile     = closeProfile;
 window.saveProfile      = saveProfile;
 window.selectProfileMode = selectProfileMode;
-
 
 </script>
 </body>
