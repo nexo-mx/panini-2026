@@ -407,6 +407,20 @@ window.submitCounter = async () => {
   } catch(e) { console.error(e); showToast('❌ Error al enviar contraoferta'); }
 };
 
+// Dismiss (clear) a declined proposal so the chat stays open
+window.dismissProposal = async () => {
+  if (!currentUser || !window._openChatUid) return;
+  const cid = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+  try {
+    await chatTransaction(cid, data => ({
+      ...data,
+      participants: [currentUser.uid, otherUid],
+      proposal: null
+    }));
+  } catch(e) { console.error(e); }
+};
+
 // ── Firestore helper: lee el doc, aplica cambios en JS, escribe todo ──
 async function chatTransaction(cid, mutateFn) {
   const ref = doc(db, 'chats', cid);
@@ -595,7 +609,7 @@ function renderChatModal(data, otherUid) {
     actionsHtml = `
       <div class="proposal-status declined">❌ Propuesta rechazada</div>
       <div class="proposal-actions" style="margin-top:8px;">
-        <button class="btn btn-outline" style="width:100%;" onclick="closeChat()">✕ Cerrar</button>
+        <button class="btn btn-outline" style="width:100%;" onclick="dismissProposal()">✕ Cerrar propuesta</button>
       </div>`;
   } else if (status === 'accepted') {
     if (!myCompleted) {
@@ -1026,6 +1040,9 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 .chat-messages {
   flex:1; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:8px;
   min-height:150px; max-height:280px;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+  touch-action:pan-y;
 }
 .chat-bubble {
   max-width:75%; display:flex; flex-direction:column;
