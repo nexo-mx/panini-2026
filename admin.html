@@ -428,7 +428,6 @@ window.toggleUserDetail = function(uid) {
 // Stickers that shouldn't be in circulation yet
 // (teams not yet officially released — adjust as needed)
 const SUSPICIOUS_TEAMS = ['TUR','KOR','RSA','CZE','BIH','QAT','HAI','SCO','CUW','CIV','CPV','KSA','IRQ','ALG','JOR','COD','UZB','GHA'];
-};
 
 function isSuspicious(code) {
   return SUSPICIOUS_TEAMS.some(t => code.startsWith(t + ' '));
