@@ -349,7 +349,7 @@ const ALL_TEAMS_DEF = [
   {code:'GHA',name:'Ghana',flag:'🇬🇭'},{code:'PAN',name:'Panamá',flag:'🇵🇦'},
 ];
 
-function toggleUserDetail(uid) {
+window.toggleUserDetail = function(uid) {
   const row    = document.getElementById(`detail-${uid}`);
   const arrow  = document.getElementById(`arrow-${uid}`);
   const panel  = document.getElementById(`album-${uid}`);
@@ -428,6 +428,8 @@ function toggleUserDetail(uid) {
 // Stickers that shouldn't be in circulation yet
 // (teams not yet officially released — adjust as needed)
 const SUSPICIOUS_TEAMS = ['TUR','KOR','RSA','CZE','BIH','QAT','HAI','SCO','CUW','CIV','CPV','KSA','IRQ','ALG','JOR','COD','UZB','GHA'];
+};
+
 function isSuspicious(code) {
   return SUSPICIOUS_TEAMS.some(t => code.startsWith(t + ' '));
 }
