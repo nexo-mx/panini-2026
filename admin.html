@@ -279,10 +279,13 @@ function renderDashboard(users, chats) {
       <span class="team-complete">${t.complete > 0 ? `${t.complete} completo${t.complete>1?'s':''}` : ''}</span>
     </div>`).join('');
 
-  // Users table
+  // Store full user data globally for expandable rows
+  window._adminUsers = users;
+
+  // Users table with expandable rows
   const utEl = document.getElementById('users-table-body');
   utEl.innerHTML = userRows.map((u,i) => `
-    <tr>
+    <tr class="user-main-row" onclick="toggleUserDetail('${u.uid}')" style="cursor:pointer;">
       <td><span style="color:#555;font-family:'DM Mono',monospace;font-size:11px;">${i+1}</span></td>
       <td>
         <div style="display:flex;align-items:center;gap:8px;">
@@ -307,9 +310,126 @@ function renderDashboard(users, chats) {
       <td style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--green);">${u.got}</td>
       <td style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--orange);">${u.dups}</td>
       <td><span style="width:8px;height:8px;border-radius:50%;background:${u.active?'var(--green)':'#333'};display:inline-block;"></span></td>
+      <td style="color:#333;font-size:12px;" id="arrow-${u.uid}">▶</td>
+    </tr>
+    <tr class="user-detail-row" id="detail-${u.uid}" style="display:none;">
+      <td colspan="8" style="padding:0;">
+        <div class="user-album-panel" id="album-${u.uid}"></div>
+      </td>
     </tr>`).join('');
 
   document.getElementById('last-updated').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+}
+
+// ── EXPANDABLE USER ALBUM ─────────────────────────────────────
+const ALL_TEAMS_DEF = [
+  {code:'MEX',name:'México',flag:'🇲🇽'},{code:'RSA',name:'Sudáfrica',flag:'🇿🇦'},
+  {code:'KOR',name:'Corea del Sur',flag:'🇰🇷'},{code:'CZE',name:'Chequia',flag:'🇨🇿'},
+  {code:'CAN',name:'Canadá',flag:'🇨🇦'},{code:'BIH',name:'Bosnia',flag:'🇧🇦'},
+  {code:'QAT',name:'Qatar',flag:'🇶🇦'},{code:'SUI',name:'Suiza',flag:'🇨🇭'},
+  {code:'BRA',name:'Brasil',flag:'🇧🇷'},{code:'MAR',name:'Marruecos',flag:'🇲🇦'},
+  {code:'HAI',name:'Haití',flag:'🇭🇹'},{code:'SCO',name:'Escocia',flag:'🏴󠁧󠁢󠁳󠁣󠁴󠁿'},
+  {code:'USA',name:'USA',flag:'🇺🇸'},{code:'PAR',name:'Paraguay',flag:'🇵🇾'},
+  {code:'AUS',name:'Australia',flag:'🇦🇺'},{code:'TUR',name:'Turquía',flag:'🇹🇷'},
+  {code:'GER',name:'Alemania',flag:'🇩🇪'},{code:'CUW',name:'Curazao',flag:'🇨🇼'},
+  {code:'CIV',name:'C. Marfil',flag:'🇨🇮'},{code:'ECU',name:'Ecuador',flag:'🇪🇨'},
+  {code:'NED',name:'Países Bajos',flag:'🇳🇱'},{code:'JPN',name:'Japón',flag:'🇯🇵'},
+  {code:'SWE',name:'Suecia',flag:'🇸🇪'},{code:'TUN',name:'Túnez',flag:'🇹🇳'},
+  {code:'BEL',name:'Bélgica',flag:'🇧🇪'},{code:'EGY',name:'Egipto',flag:'🇪🇬'},
+  {code:'IRN',name:'Irán',flag:'🇮🇷'},{code:'NZL',name:'Nueva Zelanda',flag:'🇳🇿'},
+  {code:'ESP',name:'España',flag:'🇪🇸'},{code:'CPV',name:'Cabo Verde',flag:'🇨🇻'},
+  {code:'KSA',name:'Arabia Saudita',flag:'🇸🇦'},{code:'URU',name:'Uruguay',flag:'🇺🇾'},
+  {code:'FRA',name:'Francia',flag:'🇫🇷'},{code:'SEN',name:'Senegal',flag:'🇸🇳'},
+  {code:'IRQ',name:'Irak',flag:'🇮🇶'},{code:'NOR',name:'Noruega',flag:'🇳🇴'},
+  {code:'ARG',name:'Argentina',flag:'🇦🇷'},{code:'ALG',name:'Argelia',flag:'🇩🇿'},
+  {code:'AUT',name:'Austria',flag:'🇦🇹'},{code:'JOR',name:'Jordania',flag:'🇯🇴'},
+  {code:'POR',name:'Portugal',flag:'🇵🇹'},{code:'COD',name:'RD Congo',flag:'🇨🇩'},
+  {code:'UZB',name:'Uzbekistán',flag:'🇺🇿'},{code:'COL',name:'Colombia',flag:'🇨🇴'},
+  {code:'ENG',name:'Inglaterra',flag:'🏴󠁧󠁢󠁥󠁮󠁧󠁿'},{code:'CRO',name:'Croacia',flag:'🇭🇷'},
+  {code:'GHA',name:'Ghana',flag:'🇬🇭'},{code:'PAN',name:'Panamá',flag:'🇵🇦'},
+];
+
+function toggleUserDetail(uid) {
+  const row    = document.getElementById(`detail-${uid}`);
+  const arrow  = document.getElementById(`arrow-${uid}`);
+  const panel  = document.getElementById(`album-${uid}`);
+  const isOpen = row.style.display !== 'none';
+
+  // Close all others
+  document.querySelectorAll('.user-detail-row').forEach(r => r.style.display = 'none');
+  document.querySelectorAll('[id^="arrow-"]').forEach(a => { a.textContent = '▶'; a.style.color = '#333'; });
+
+  if (isOpen) return; // toggle off
+
+  row.style.display = 'table-row';
+  arrow.textContent = '▼';
+  arrow.style.color = 'var(--gold)';
+
+  // Render album if not yet rendered
+  if (panel.dataset.rendered) return;
+  panel.dataset.rendered = '1';
+
+  const userData = window._adminUsers.find(u => u.uid === uid);
+  const stickers = userData?.stickers || {};
+
+  // Summary counts
+  const got  = ALL_CODES.filter(c => (stickers[c]||0) >= 1).length;
+  const dups = ALL_CODES.reduce((s,c) => s + Math.max(0,(stickers[c]||0)-1), 0);
+  const suspicious = ALL_CODES.filter(c => (stickers[c]||0) >= 1 && isSuspicious(c)).map(c => ({ c, n: stickers[c] }));
+
+  let html = `<div style="padding:16px 20px;border-top:1px solid var(--border);background:var(--surface2);">`;
+
+  // Suspicious alert
+  if (suspicious.length > 0) {
+    html += `<div style="background:rgba(224,64,64,0.08);border:1px solid rgba(224,64,64,0.3);border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+      <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--red);margin-bottom:8px;">⚠️ ESTAMPAS SOSPECHOSAS — no deberían estar en circulación</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${suspicious.map(({c,n}) => `<span style="font-family:'DM Mono',monospace;font-size:11px;padding:3px 8px;background:rgba(224,64,64,0.15);border:1px solid rgba(224,64,64,0.4);border-radius:4px;color:#ff8080;">${c} ×${n}</span>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  // Legend
+  html += `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;font-family:'DM Mono',monospace;font-size:10px;letter-spacing:1px;color:#555;">
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--green);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Tiene ×1</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>×2</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--orange);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>×3+</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--border);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Falta</span>
+  </div>`;
+
+  // Teams grid
+  html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;">`;
+  for (const team of ALL_TEAMS_DEF) {
+    const codes = Array.from({length:20}, (_,i) => `${team.code} ${i+1}`);
+    const teamGot = codes.filter(c => (stickers[c]||0) >= 1).length;
+    const complete = teamGot === 20;
+    html += `<div style="background:var(--surface);border:1px solid ${complete?'var(--green)':'var(--border)'};border-radius:8px;padding:10px 12px;">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        ${team.flag} ${team.name}
+        <span style="font-family:'DM Mono',monospace;font-size:10px;color:${complete?'var(--green)':'#444'};margin-left:auto;">${teamGot}/20${complete?' ✅':''}</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:3px;">
+        ${codes.map(c => {
+          const n = stickers[c] || 0;
+          const susp = isSuspicious(c) && n > 0;
+          const bg = susp ? 'var(--red)' : n === 0 ? 'var(--border)' : n === 1 ? 'var(--green)' : n === 2 ? 'var(--blue)' : 'var(--orange)';
+          const num = c.split(' ')[1];
+          return `<div title="${c}${n>1?' ×'+n:''}" style="width:20px;height:20px;border-radius:3px;background:${bg};display:flex;align-items:center;justify-content:center;font-family:'DM Mono',monospace;font-size:8px;color:${n>0?'#fff':'#555'};position:relative;">
+            ${num}${n>1?`<span style="position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:var(--orange);font-size:7px;display:flex;align-items:center;justify-content:center;border:1px solid var(--bg);">${n}</span>`:''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+  html += `</div></div>`;
+  panel.innerHTML = html;
+}
+
+// Stickers that shouldn't be in circulation yet
+// (teams not yet officially released — adjust as needed)
+const SUSPICIOUS_TEAMS = ['TUR','KOR','RSA','CZE','BIH','QAT','HAI','SCO','CUW','CIV','CPV','KSA','IRQ','ALG','JOR','COD','UZB','GHA'];
+function isSuspicious(code) {
+  return SUSPICIOUS_TEAMS.some(t => code.startsWith(t + ' '));
 }
 
 function showLogin() {
@@ -504,6 +624,10 @@ tbody td { padding:10px 14px; font-size:13px; }
 .mode-pill.both { background:rgba(160,96,240,0.15); color:var(--gold); border:1px solid rgba(160,96,240,0.3); }
 .mode-pill.swap { background:rgba(48,192,96,0.1);  color:var(--green); border:1px solid rgba(48,192,96,0.25); }
 
+.user-main-row:hover { background:var(--surface2) !important; }
+.user-detail-row td { background:var(--surface2); }
+.user-album-panel { max-height:600px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+
 ::-webkit-scrollbar { width:4px; height:4px; }
 ::-webkit-scrollbar-track { background:var(--bg); }
 ::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
@@ -661,6 +785,7 @@ tbody td { padding:10px 14px; font-size:13px; }
               <th>Conseguidas</th>
               <th>Repetidas</th>
               <th>Activo</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="users-table-body">
