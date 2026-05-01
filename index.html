@@ -432,6 +432,26 @@ window.submitCounter = async () => {
   } catch(e) { console.error(e); showToast('❌ Error al enviar contraoferta'); }
 };
 
+// Cancel your own pending proposal
+window.cancelProposal = async () => {
+  if (!currentUser || !window._openChatUid) return;
+  if (!confirm('¿Cancelar tu propuesta de intercambio?')) return;
+  const cid = chatId(currentUser.uid, window._openChatUid);
+  const otherUid = window._openChatUid;
+  const myName = window.userProfile?.nickname || currentUser.displayName;
+  const sysMsg = { from: '__system__', text: `🚫 ${myName} canceló la propuesta.`, ts: Date.now() };
+  try {
+    await chatTransaction(cid, data => ({
+      ...data,
+      participants: [currentUser.uid, otherUid],
+      proposal: null,
+      messages: [...(data.messages || []), sysMsg],
+      unread: { ...(data.unread || {}), [otherUid]: ((data.unread||{})[otherUid]||0)+1 }
+    }));
+    showToast('🚫 Propuesta cancelada');
+  } catch(e) { console.error(e); showToast('❌ Error al cancelar'); }
+};
+
 // Dismiss (clear) a declined proposal so the chat stays open
 window.dismissProposal = async () => {
   if (!currentUser || !window._openChatUid) return;
@@ -629,7 +649,11 @@ function renderChatModal(data, otherUid) {
         <button class="btn" style="background:rgba(48,192,96,0.2);color:var(--green);border:1px solid rgba(48,192,96,0.4);" onclick="acceptProposal()">✅ Aceptar</button>
       </div>`;
   } else if (status === 'pending' && iAmProposer) {
-    actionsHtml = `<div class="proposal-status pending">⏳ Esperando respuesta de ${otherName}…</div>`;
+    actionsHtml = `
+      <div class="proposal-status pending">⏳ Esperando respuesta de ${otherName}…</div>
+      <div class="proposal-actions" style="margin-top:8px;">
+        <button class="btn btn-danger" style="width:100%;" onclick="cancelProposal()">🚫 Cancelar propuesta</button>
+      </div>`;
   } else if (status === 'declined') {
     actionsHtml = `
       <div class="proposal-status declined">❌ Propuesta rechazada</div>
@@ -1109,6 +1133,8 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
 /* Proposal area */
 .chat-proposal-area {
   padding:12px 16px; border-top:1px solid var(--border); flex-shrink:0;
+  overflow-y:auto; max-height:45vh;
+  -webkit-overflow-scrolling:touch; overscroll-behavior:contain; touch-action:pan-y;
 }
 .proposal-card {
   background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:14px;
@@ -1319,7 +1345,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
       </div>
       <div class="progress-area">
         <div class="prog-nums">
-          <span>Conseguidas: <strong id="hdr-got">0</strong>/980</span>
+          <span>Conseguidas: <strong id="hdr-got">0</strong>/994</span>
           <span id="hdr-pct">0%</span>
         </div>
         <div class="prog-track"><div class="prog-fill" id="hdr-bar" style="width:0%"></div></div>
@@ -1359,6 +1385,8 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
       <button class="filter-btn" onclick="setFilter('missing',this)">Faltantes</button>
       <button class="filter-btn" onclick="setFilter('dups',this)">Repetidas</button>
       <button class="filter-btn" onclick="setFilter('complete',this)">Completos</button>
+      <button class="filter-btn" onclick="exportText('missing')" title="Compartir faltantes como texto">📋 Faltantes</button>
+      <button class="filter-btn" onclick="exportText('dups')" title="Compartir repetidas como texto">📋 Repetidas</button>
     </div>
     <div class="main">
       <div class="stats-bar">
@@ -1375,7 +1403,7 @@ body { font-family: 'Barlow', sans-serif; background: var(--bg); color: var(--te
         <div class="stat-div"></div>
         <div class="stat"><span class="stat-n green" id="s-got">0</span><span class="stat-l">Conseguidas</span></div>
         <div class="stat-div"></div>
-        <div class="stat"><span class="stat-n red"   id="s-miss">980</span><span class="stat-l">Faltantes</span></div>
+        <div class="stat"><span class="stat-n red"   id="s-miss">994</span><span class="stat-l">Faltantes</span></div>
         <div class="stat-div"></div>
         <div class="stat"><span class="stat-n orange" id="s-dups">0</span><span class="stat-l">Repetidas</span></div>
         <div class="stat-div"></div>
@@ -1915,25 +1943,28 @@ window.renderTrades = function() {
     }
   }
 
-  let html = '';
+  // Build list with trade counts, then sort by theyCanGive desc
+  const tradeList = [];
   for (const uid of uids) {
     const udata     = users[uid];
     const uStickers = udata.stickers || {};
-    const uName     = udata.displayName || udata.email || 'Usuario';
-    const uPhoto    = udata.photoURL || null;
-
     const theyCanGive = [];
     const theyNeed    = [];
-
     for (const code of ALL_CODES) {
       const theirCount = uStickers[code] || 0;
       const myCount    = getCount(code);
       if (theirCount > 1 && myMissing.has(code)) theyCanGive.push({ code, extras: theirCount - 1 });
       if (myCount > 1 && theirCount === 0)       theyNeed.push({ code, extras: myCount - 1 });
     }
-
     if (theyCanGive.length === 0 && theyNeed.length === 0) continue;
+    tradeList.push({ uid, udata, uStickers, theyCanGive, theyNeed });
+  }
+  tradeList.sort((a, b) => b.theyCanGive.length - a.theyCanGive.length);
 
+  let html = '';
+  for (const { uid, udata, uStickers, theyCanGive, theyNeed } of tradeList) {
+    const uName  = udata.profile?.nickname || udata.displayName || udata.email || 'Usuario';
+    const uPhoto = udata.photoURL || null;
     const openId = `utc-${uid.slice(0,8)}`;
     const unreadCount = (window._chatUnreadMap || {})[uid] || 0;
 
@@ -2110,6 +2141,77 @@ async function renderMessages() {
 window.renderMessages = renderMessages;
 
 // ═══════════════════════════════════════════════════════════════
+// EXPORT TEXT
+// ═══════════════════════════════════════════════════════════════
+function exportText(type) {
+  const name = window.userProfile?.nickname || currentUser?.displayName || 'Yo';
+  let lines = [];
+
+  if (type === 'missing') {
+    lines.push(`📋 FALTANTES DE ${name.toUpperCase()} — Álbum Panini Mundial 2026`);
+    lines.push('');
+    for (const sec of SECTIONS) {
+      const missing = sec.stickers.filter(s => getCount(s.code) === 0);
+      if (missing.length === 0) continue;
+      lines.push(`${sec.flag} ${sec.name} (${missing.length} faltantes)`);
+      lines.push(missing.map(s => s.code).join('  '));
+      lines.push('');
+    }
+    lines.push('¿Tienes alguna? ¡Escríbeme! 🔄');
+  } else {
+    lines.push(`🔄 REPETIDAS DE ${name.toUpperCase()} — Álbum Panini Mundial 2026`);
+    lines.push('');
+    for (const sec of SECTIONS) {
+      const dups = sec.stickers.filter(s => getCount(s.code) > 1);
+      if (dups.length === 0) continue;
+      lines.push(`${sec.flag} ${sec.name}`);
+      lines.push(dups.map(s => `${s.code}${getCount(s.code) > 2 ? ` ×${getCount(s.code)-1}` : ''}`).join('  '));
+      lines.push('');
+    }
+    lines.push('¿Te falta alguna? ¡Escríbeme! 🔄');
+  }
+
+  const text = lines.join('\n');
+
+  // Copy to clipboard + show modal
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('✅ Copiado al portapapeles');
+  }).catch(() => {});
+
+  // Also show in a modal so they can copy manually on mobile
+  showTextExportModal(text, type);
+}
+
+function showTextExportModal(text, type) {
+  const existing = document.getElementById('text-export-modal');
+  if (existing) existing.remove();
+
+  const title = type === 'missing' ? '📋 Mis Faltantes' : '🔄 Mis Repetidas';
+  const modal = document.createElement('div');
+  modal.id = 'text-export-modal';
+  modal.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);`;
+  modal.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:480px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.7);">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+        <span style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;color:var(--gold);">${title}</span>
+        <button onclick="document.getElementById('text-export-modal').remove()" style="background:none;border:none;color:#555;font-size:20px;cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:12px 16px;flex-shrink:0;">
+        <p style="font-size:12px;color:#555;margin-bottom:10px;">Copia este texto y compártelo por WhatsApp o donde quieras.</p>
+        <button onclick="navigator.clipboard.writeText(document.getElementById('tex-content').value).then(()=>showToast('✅ Copiado'))"
+          style="width:100%;font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;padding:10px;background:linear-gradient(135deg,var(--nexo2),var(--nexo));color:white;border:none;border-radius:8px;cursor:pointer;">
+          📋 Copiar todo
+        </button>
+      </div>
+      <textarea id="tex-content" readonly style="flex:1;margin:0 16px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;color:var(--text);font-family:'Barlow Condensed',sans-serif;font-size:12px;line-height:1.6;resize:none;outline:none;overflow-y:auto;-webkit-overflow-scrolling:touch;">${text}</textarea>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+window.exportText = exportText;
+
+// ═══════════════════════════════════════════════════════════════
 // PDF EXPORT
 // ═══════════════════════════════════════════════════════════════
 function exportPDF() {
@@ -2130,7 +2232,7 @@ function exportPDF() {
   doc.text('PANINI FIFA WORLD CUP 2026 — ESTAMPAS FALTANTES', m, 12);
   doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(150,150,150);
   const { got, missing } = getStats();
-  doc.text(`${got}/980 conseguidas · ${missing} faltantes · ${new Date().toLocaleDateString('es-MX')}`, m, 22);
+  doc.text(`${got}/994 conseguidas · ${missing} faltantes · ${new Date().toLocaleDateString('es-MX')}`, m, 22);
   y = 34;
 
   if (missing === 0) {
