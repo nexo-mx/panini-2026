@@ -397,8 +397,43 @@ window.toggleUserDetail = function(uid) {
     <span><span style="display:inline-block;width:10px;height:10px;background:var(--border);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Falta</span>
   </div>`;
 
-  // Teams grid
+  // Helper to render a group of stickers
+  function stickerDots(codes) {
+    return codes.map(c => {
+      const n = stickers[c] || 0;
+      const bg = n === 0 ? 'var(--border)' : n === 1 ? 'var(--green)' : n === 2 ? 'var(--blue)' : 'var(--orange)';
+      const lbl = c.split(' ').slice(1).join(' ');
+      return `<div title="${c}${n>1?' ×'+n:''}" style="width:22px;height:22px;border-radius:3px;background:${bg};display:flex;align-items:center;justify-content:center;font-family:'DM Mono',monospace;font-size:7px;color:${n>0?'#fff':'#555'};position:relative;">
+        ${lbl}${n>1?`<span style="position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:var(--orange);font-size:7px;display:flex;align-items:center;justify-content:center;border:1px solid var(--bg);">${n}</span>`:''}
+      </div>`;
+    }).join('');
+  }
+
   html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;">`;
+
+  // ── Intro / FWC ──
+  const fwcCodes = ['00 1', ...Array.from({length:19},(_,i)=>`FWC ${i+1}`)];
+  const fwcGot = fwcCodes.filter(c => (stickers[c]||0) >= 1).length;
+  html += `<div style="background:var(--surface);border:1px solid ${fwcGot===fwcCodes.length?'var(--green)':'var(--border)'};border-radius:8px;padding:10px 12px;">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+      🏆 Introducción / FWC
+      <span style="font-family:'DM Mono',monospace;font-size:10px;color:${fwcGot===fwcCodes.length?'var(--green)':'#444'};margin-left:auto;">${fwcGot}/${fwcCodes.length}${fwcGot===fwcCodes.length?' ✅':''}</span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:3px;">${stickerDots(fwcCodes)}</div>
+  </div>`;
+
+  // ── Coca-Cola ──
+  const ccCodes = Array.from({length:14},(_,i)=>`CC ${i+1}`);
+  const ccGot = ccCodes.filter(c => (stickers[c]||0) >= 1).length;
+  html += `<div style="background:var(--surface);border:1px solid ${ccGot===ccCodes.length?'var(--green)':'var(--border)'};border-radius:8px;padding:10px 12px;">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+      🥤 Coca-Cola
+      <span style="font-family:'DM Mono',monospace;font-size:10px;color:${ccGot===ccCodes.length?'var(--green)':'#444'};margin-left:auto;">${ccGot}/${ccCodes.length}${ccGot===ccCodes.length?' ✅':''}</span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:3px;">${stickerDots(ccCodes)}</div>
+  </div>`;
+
+  // ── Teams ──
   for (const team of ALL_TEAMS_DEF) {
     const codes = Array.from({length:20}, (_,i) => `${team.code} ${i+1}`);
     const teamGot = codes.filter(c => (stickers[c]||0) >= 1).length;
@@ -408,17 +443,7 @@ window.toggleUserDetail = function(uid) {
         ${team.flag} ${team.name}
         <span style="font-family:'DM Mono',monospace;font-size:10px;color:${complete?'var(--green)':'#444'};margin-left:auto;">${teamGot}/20${complete?' ✅':''}</span>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:3px;">
-        ${codes.map(c => {
-          const n = stickers[c] || 0;
-          const susp = isSuspicious(c) && n > 0;
-          const bg = susp ? 'var(--red)' : n === 0 ? 'var(--border)' : n === 1 ? 'var(--green)' : n === 2 ? 'var(--blue)' : 'var(--orange)';
-          const num = c.split(' ')[1];
-          return `<div title="${c}${n>1?' ×'+n:''}" style="width:20px;height:20px;border-radius:3px;background:${bg};display:flex;align-items:center;justify-content:center;font-family:'DM Mono',monospace;font-size:8px;color:${n>0?'#fff':'#555'};position:relative;">
-            ${num}${n>1?`<span style="position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:var(--orange);font-size:7px;display:flex;align-items:center;justify-content:center;border:1px solid var(--bg);">${n}</span>`:''}
-          </div>`;
-        }).join('')}
-      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:3px;">${stickerDots(codes)}</div>
     </div>`;
   }
   html += `</div></div>`;
@@ -427,10 +452,8 @@ window.toggleUserDetail = function(uid) {
 
 // Stickers that shouldn't be in circulation yet
 // (teams not yet officially released — adjust as needed)
-const SUSPICIOUS_TEAMS = ['TUR','KOR','RSA','CZE','BIH','QAT','HAI','SCO','CUW','CIV','CPV','KSA','IRQ','ALG','JOR','COD','UZB','GHA'];
-
 function isSuspicious(code) {
-  return SUSPICIOUS_TEAMS.some(t => code.startsWith(t + ' '));
+  return false; // todas las estampas ya están en circulación
 }
 
 function showLogin() {
