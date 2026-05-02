@@ -10,7 +10,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, collection, getDocs, doc, getDoc }
+import { getFirestore, collection, getDocs, doc, getDoc, setDoc }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const ADMIN_UID = 'Q0Hz0gZzftZLQnwcmFQKp2Cy0hq2';
@@ -27,6 +27,8 @@ const firebaseConfig = {
 const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db   = getFirestore(app);
+window._db = db;
+window._firestoreUtils = { collection, getDocs, doc, getDoc, setDoc };
 
 // ── AUTH ──────────────────────────────────────────────────────
 window.loginGoogle = async () => {
@@ -349,6 +351,38 @@ const ALL_TEAMS_DEF = [
   {code:'GHA',name:'Ghana',flag:'🇬🇭'},{code:'PAN',name:'Panamá',flag:'🇵🇦'},
 ];
 
+window.resetDuplicates = async function(uid) {
+  const userData = window._adminUsers.find(u => u.uid === uid);
+  const name = userData?.profile?.nickname || userData?.displayName || uid.slice(0,8);
+  if (!confirm(`¿Desmarcar todas las repetidas de ${name}?\n\nEsto dejará cada estampa que tiene en ×1 (conserva las que tiene, elimina las extras).`)) return;
+
+  const stickers = { ...(userData?.stickers || {}) };
+  let changed = 0;
+  for (const code of Object.keys(stickers)) {
+    if (stickers[code] > 1) { stickers[code] = 1; changed++; }
+  }
+  if (changed === 0) { alert('Este usuario no tiene repetidas.'); return; }
+
+  try {
+    const { getFirestore, doc, setDoc } = window._firestoreUtils;
+    await setDoc(doc(window._db, 'users', uid), { stickers }, { merge: true });
+
+    // Update local cache so re-render works
+    const idx = window._adminUsers.findIndex(u => u.uid === uid);
+    if (idx !== -1) window._adminUsers[idx].stickers = stickers;
+
+    // Force re-render of that panel
+    const panel = document.getElementById(`album-${uid}`);
+    if (panel) { delete panel.dataset.rendered; panel.innerHTML = ''; }
+    toggleUserDetail(uid);
+
+    alert(`✅ Listo. Se eliminaron las repetidas de ${changed} estampa(s) de ${name}.`);
+  } catch(e) {
+    console.error(e);
+    alert('❌ Error al guardar: ' + e.message);
+  }
+};
+
 window.toggleUserDetail = function(uid) {
   const row    = document.getElementById(`detail-${uid}`);
   const arrow  = document.getElementById(`arrow-${uid}`);
@@ -389,12 +423,17 @@ window.toggleUserDetail = function(uid) {
     </div>`;
   }
 
-  // Legend
-  html += `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;font-family:'DM Mono',monospace;font-size:10px;letter-spacing:1px;color:#555;">
-    <span><span style="display:inline-block;width:10px;height:10px;background:var(--green);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Tiene ×1</span>
-    <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>×2</span>
-    <span><span style="display:inline-block;width:10px;height:10px;background:var(--orange);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>×3+</span>
-    <span><span style="display:inline-block;width:10px;height:10px;background:var(--border);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Falta</span>
+  // Legend + admin action bar
+  html += `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+    <div style="display:flex;gap:14px;flex-wrap:wrap;font-family:'DM Mono',monospace;font-size:10px;letter-spacing:1px;color:#555;flex:1;">
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--green);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Tiene ×1</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>×2</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--orange);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>×3+</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--border);border-radius:2px;margin-right:4px;vertical-align:middle;"></span>Falta</span>
+    </div>
+    <button onclick="resetDuplicates('${uid}')" style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;padding:7px 14px;background:rgba(255,96,48,0.12);color:var(--orange);border:1px solid rgba(255,96,48,0.35);border-radius:6px;cursor:pointer;white-space:nowrap;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,96,48,0.25)'" onmouseout="this.style.background='rgba(255,96,48,0.12)'">
+      ↺ Desmarcar repetidas
+    </button>
   </div>`;
 
   // Helper to render a group of stickers
