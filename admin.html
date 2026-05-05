@@ -10,7 +10,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, collection, getDocs, doc, getDoc, setDoc }
+import { getFirestore, collection, getDocs, doc, getDoc, setDoc, onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const ADMIN_UID = 'Q0Hz0gZzftZLQnwcmFQKp2Cy0hq2';
@@ -321,6 +321,7 @@ function renderDashboard(users, chats) {
     </tr>`).join('');
 
   document.getElementById('last-updated').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+  loadAndRenderShopAdmin();
 }
 
 // ── EXPANDABLE USER ALBUM ─────────────────────────────────────
@@ -515,6 +516,190 @@ function showStatus(msg) {
   el.textContent = msg;
   el.style.display = msg ? 'block' : 'none';
 }
+// ═══════════════════════════════════════════════════════════════
+// SHOP ADMIN
+// ═══════════════════════════════════════════════════════════════
+const NEXO_WA_NUMBER = '524621497740'; // update this
+
+const ADMIN_TEAMS = [
+  {code:'MEX',name:'México',flag:'🇲🇽'},{code:'RSA',name:'Sudáfrica',flag:'🇿🇦'},
+  {code:'KOR',name:'Corea del Sur',flag:'🇰🇷'},{code:'CZE',name:'Chequia',flag:'🇨🇿'},
+  {code:'CAN',name:'Canadá',flag:'🇨🇦'},{code:'BIH',name:'Bosnia',flag:'🇧🇦'},
+  {code:'QAT',name:'Qatar',flag:'🇶🇦'},{code:'SUI',name:'Suiza',flag:'🇨🇭'},
+  {code:'BRA',name:'Brasil',flag:'🇧🇷'},{code:'MAR',name:'Marruecos',flag:'🇲🇦'},
+  {code:'HAI',name:'Haití',flag:'🇭🇹'},{code:'SCO',name:'Escocia',flag:'🏴󠁧󠁢󠁳󠁣󠁴󠁿'},
+  {code:'USA',name:'USA',flag:'🇺🇸'},{code:'PAR',name:'Paraguay',flag:'🇵🇾'},
+  {code:'AUS',name:'Australia',flag:'🇦🇺'},{code:'TUR',name:'Turquía',flag:'🇹🇷'},
+  {code:'GER',name:'Alemania',flag:'🇩🇪'},{code:'CUW',name:'Curazao',flag:'🇨🇼'},
+  {code:'CIV',name:'C. Marfil',flag:'🇨🇮'},{code:'ECU',name:'Ecuador',flag:'🇪🇨'},
+  {code:'NED',name:'Países Bajos',flag:'🇳🇱'},{code:'JPN',name:'Japón',flag:'🇯🇵'},
+  {code:'SWE',name:'Suecia',flag:'🇸🇪'},{code:'TUN',name:'Túnez',flag:'🇹🇳'},
+  {code:'BEL',name:'Bélgica',flag:'🇧🇪'},{code:'EGY',name:'Egipto',flag:'🇪🇬'},
+  {code:'IRN',name:'Irán',flag:'🇮🇷'},{code:'NZL',name:'Nueva Zelanda',flag:'🇳🇿'},
+  {code:'ESP',name:'España',flag:'🇪🇸'},{code:'CPV',name:'Cabo Verde',flag:'🇨🇻'},
+  {code:'KSA',name:'Arabia Saudita',flag:'🇸🇦'},{code:'URU',name:'Uruguay',flag:'🇺🇾'},
+  {code:'FRA',name:'Francia',flag:'🇫🇷'},{code:'SEN',name:'Senegal',flag:'🇸🇳'},
+  {code:'IRQ',name:'Irak',flag:'🇮🇶'},{code:'NOR',name:'Noruega',flag:'🇳🇴'},
+  {code:'ARG',name:'Argentina',flag:'🇦🇷'},{code:'ALG',name:'Argelia',flag:'🇩🇿'},
+  {code:'AUT',name:'Austria',flag:'🇦🇹'},{code:'JOR',name:'Jordania',flag:'🇯🇴'},
+  {code:'POR',name:'Portugal',flag:'🇵🇹'},{code:'COD',name:'RD Congo',flag:'🇨🇩'},
+  {code:'UZB',name:'Uzbekistán',flag:'🇺🇿'},{code:'COL',name:'Colombia',flag:'🇨🇴'},
+  {code:'ENG',name:'Inglaterra',flag:'🏴󠁧󠁢󠁥󠁮󠁧󠁿'},{code:'CRO',name:'Croacia',flag:'🇭🇷'},
+  {code:'GHA',name:'Ghana',flag:'🇬🇭'},{code:'PAN',name:'Panamá',flag:'🇵🇦'},
+];
+
+const ADMIN_INTRO = ['00 1', ...Array.from({length:19},(_,i)=>`FWC ${i+1}`)];
+const ADMIN_CC    = Array.from({length:14},(_,i)=>`CC ${i+1}`);
+
+window._shopStock = {};
+let _saveTimer = null;
+
+function isHoloAdmin(code) {
+  if (!code) return false;
+  if (code.startsWith('00 ') || code.startsWith('FWC ')) return true;
+  const parts = code.split(' ');
+  return parts.length === 2 && parts[1] === '1';
+}
+
+async function loadAndRenderShopAdmin() {
+  const panel = document.getElementById('shop-admin-panel');
+  if (!panel) return;
+  panel.innerHTML = '<p style="color:#555;font-size:13px;text-align:center;padding:20px;">Cargando…</p>';
+  try {
+    const snap = await getDoc(doc(db, 'shop', 'inventory'));
+    window._shopStock = snap.exists() ? (snap.data().stock || {}) : {};
+    renderShopAdmin();
+  } catch(e) {
+    panel.innerHTML = `<p style="color:var(--red);font-size:13px;padding:12px;">Error: ${e.message}</p>`;
+  }
+}
+
+function renderShopAdmin() {
+  const panel = document.getElementById('shop-admin-panel');
+  if (!panel) return;
+  const stock = window._shopStock;
+  const totalCodes = [...ADMIN_INTRO, ...ADMIN_CC, ...ADMIN_TEAMS.flatMap(t => Array.from({length:20},(_,i)=>`${t.code} ${i+1}`))];
+  const totalInStock = totalCodes.filter(c => (stock[c]||0) > 0).length;
+  const totalQty = totalCodes.reduce((s,c) => s + (stock[c]||0), 0);
+
+  function chipHtml(code) {
+    const qty = stock[code] || 0;
+    const holo = isHoloAdmin(code);
+    const lbl = code.split(' ').slice(1).join(' ');
+    return `<div class="inv-chip ${qty>0?'has-stock':''}" id="ic-${code.replace(/ /g,'_')}">
+      <span class="inv-chip-code">${holo?'✨ ':''}${code.split(' ').slice(-1)[0]}</span>
+      <button class="inv-btn minus" onclick="adjustStock('${code}',-1)">−</button>
+      <span class="inv-qty" id="iq-${code.replace(/ /g,'_')}">${qty}</span>
+      <button class="inv-btn plus"  onclick="adjustStock('${code}',+1)">+</button>
+    </div>`;
+  }
+
+  let html = `<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);">
+    <div><span style="font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--gold);">${totalInStock}</span><br><span style="font-family:'DM Mono',monospace;font-size:10px;color:#444;letter-spacing:2px;">CÓDIGOS CON STOCK</span></div>
+    <div><span style="font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--green);">${totalQty}</span><br><span style="font-family:'DM Mono',monospace;font-size:10px;color:#444;letter-spacing:2px;">UNIDADES TOTALES</span></div>
+  </div>`;
+
+  // Intro
+  html += `<div class="inv-section-hdr">🏆 Introducción / FWC</div><div class="inv-grid">`;
+  ADMIN_INTRO.forEach(c => html += chipHtml(c));
+  html += `</div>`;
+
+  // CC
+  html += `<div class="inv-section-hdr">🥤 Coca-Cola</div><div class="inv-grid">`;
+  ADMIN_CC.forEach(c => html += chipHtml(c));
+  html += `</div>`;
+
+  // Teams
+  ADMIN_TEAMS.forEach(t => {
+    const codes = Array.from({length:20},(_,i) => `${t.code} ${i+1}`);
+    const teamQty = codes.reduce((s,c) => s+(stock[c]||0), 0);
+    html += `<div class="inv-section-hdr">${t.flag} ${t.name} <span style="font-family:'DM Mono',monospace;font-size:10px;color:#555;">${teamQty} uds</span></div><div class="inv-grid">`;
+    codes.forEach(c => html += chipHtml(c));
+    html += `</div>`;
+  });
+
+  panel.innerHTML = html;
+}
+
+window.adjustStock = function(code, delta) {
+  const stock = window._shopStock;
+  const cur = stock[code] || 0;
+  const next = Math.max(0, cur + delta);
+  stock[code] = next;
+
+  // Update chip UI instantly
+  const id = code.replace(/ /g, '_');
+  const qtyEl = document.getElementById(`iq-${id}`);
+  const chip  = document.getElementById(`ic-${id}`);
+  if (qtyEl) qtyEl.textContent = next;
+  if (chip)  chip.classList.toggle('has-stock', next > 0);
+
+  // Debounced save
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await setDoc(doc(db, 'shop', 'inventory'), { stock }, { merge: false });
+      const saved = document.getElementById('shop-admin-saved');
+      if (saved) { saved.style.display = 'inline'; setTimeout(() => saved.style.display='none', 2000); }
+    } catch(e) { console.error('save error', e); }
+  }, 600);
+};
+
+window.exportShopText = function() {
+  const stock = window._shopStock;
+  const lines = ['🛒 STOCK NEXO — Álbum Panini Mundial 2026', ''];
+
+  function addSection(name, codes) {
+    const inStock = codes.filter(c => (stock[c]||0) > 0);
+    if (inStock.length === 0) return;
+    lines.push(name);
+    inStock.forEach(c => {
+      const qty = stock[c];
+      const holo = isHoloAdmin(c);
+      lines.push(`  ${holo?'✨ ':''}${c}${qty>1?` ×${qty}`:''} — $${holo?10:5}`);
+    });
+    lines.push('');
+  }
+
+  addSection('🏆 Introducción / FWC', ADMIN_INTRO);
+  addSection('🥤 Coca-Cola', ADMIN_CC);
+  ADMIN_TEAMS.forEach(t => {
+    const codes = Array.from({length:20},(_,i) => `${t.code} ${i+1}`);
+    addSection(`${t.flag} ${t.name}`, codes);
+  });
+
+  lines.push('📲 Pide las tuyas por WhatsApp: wa.me/' + NEXO_WA_NUMBER);
+
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text).then(() => showStatus('✅ Copiado al portapapeles')).catch(()=>{});
+
+  // Show modal
+  const existing = document.getElementById('export-modal');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'export-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:480px;max-height:85vh;display:flex;flex-direction:column;">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+        <span style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;color:var(--gold);">📋 Stock para compartir</span>
+        <button onclick="document.getElementById('export-modal').remove()" style="background:none;border:none;color:#555;font-size:20px;cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:12px 16px;flex-shrink:0;">
+        <button onclick="navigator.clipboard.writeText(document.getElementById('export-ta').value).then(()=>showStatus('✅ Copiado'))"
+          style="width:100%;font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;padding:10px;background:linear-gradient(135deg,#7030c0,#a060f0);color:white;border:none;border-radius:8px;cursor:pointer;">
+          📋 Copiar todo
+        </button>
+      </div>
+      <textarea id="export-ta" readonly style="flex:1;margin:0 16px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;color:var(--text);font-family:'DM Mono',monospace;font-size:11px;line-height:1.7;resize:none;outline:none;overflow-y:auto;-webkit-overflow-scrolling:touch;">${text}</textarea>
+    </div>`;
+  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+};
+
+window.loadAndRenderShopAdmin = loadAndRenderShopAdmin;
+
+
 </script>
 
 <style>
@@ -688,6 +873,32 @@ tbody td { padding:10px 14px; font-size:13px; }
 .mode-pill.swap { background:rgba(48,192,96,0.1);  color:var(--green); border:1px solid rgba(48,192,96,0.25); }
 
 .user-main-row:hover { background:var(--surface2) !important; }
+
+/* SHOP ADMIN */
+.inv-section-hdr {
+  font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700;
+  letter-spacing:3px; text-transform:uppercase; color:var(--gold);
+  margin:18px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+.inv-grid { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.inv-chip {
+  display:flex; align-items:center; gap:6px;
+  background:var(--surface2); border:1px solid var(--border); border-radius:7px;
+  padding:5px 8px; transition:border-color 0.15s;
+}
+.inv-chip.has-stock { border-color:rgba(48,192,96,0.35); }
+.inv-chip-code { font-family:'Barlow Condensed',sans-serif; font-size:12px; font-weight:700; color:var(--text); min-width:44px; }
+.inv-qty { font-family:'Bebas Neue',sans-serif; font-size:16px; color:var(--gold); min-width:20px; text-align:center; }
+.inv-chip.has-stock .inv-qty { color:var(--green); }
+.inv-btn {
+  width:20px; height:20px; border-radius:4px; border:none; cursor:pointer;
+  font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center;
+  background:rgba(255,255,255,0.06); color:#888; transition:all 0.15s;
+}
+.inv-btn:hover { background:rgba(255,255,255,0.14); color:var(--text); }
+.inv-btn.minus:hover { background:rgba(224,64,64,0.2); color:var(--red); }
+.inv-btn.plus:hover  { background:rgba(48,192,96,0.2);  color:var(--green); }
 .user-detail-row td { background:var(--surface2); }
 .user-album-panel { max-height:600px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
 
@@ -856,6 +1067,17 @@ tbody td { padding:10px 14px; font-size:13px; }
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- INVENTARIO TIENDA -->
+    <div class="section-hdr" style="margin-top:40px;">🛒 Inventario Tienda <span>ADMIN</span></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+      <button onclick="loadAndRenderShopAdmin()" class="btn-refresh">↻ Recargar</button>
+      <button onclick="exportShopText()" class="btn-refresh" style="color:var(--green);border-color:rgba(48,192,96,0.4);">📋 Exportar stock</button>
+      <span id="shop-admin-saved" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--green);display:none;">✓ Guardado</span>
+    </div>
+    <div class="panel" id="shop-admin-panel">
+      <p style="color:#555;font-size:13px;text-align:center;padding:20px;">Cargando inventario…</p>
     </div>
 
   </div>
