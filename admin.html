@@ -585,11 +585,13 @@ function renderShopAdmin() {
   function chipHtml(code) {
     const qty = stock[code] || 0;
     const holo = isHoloAdmin(code);
-    const lbl = code.split(' ').slice(1).join(' ');
-    return `<div class="inv-chip ${qty>0?'has-stock':''}" id="ic-${code.replace(/ /g,'_')}">
+    const id = code.replace(/ /g,'_');
+    return `<div class="inv-chip ${qty>0?'has-stock':''}" id="ic-${id}">
       <span class="inv-chip-code">${holo?'✨ ':''}${code.split(' ').slice(-1)[0]}</span>
       <button class="inv-btn minus" onclick="adjustStock('${code}',-1)">−</button>
-      <span class="inv-qty" id="iq-${code.replace(/ /g,'_')}">${qty}</span>
+      <input class="inv-input" id="iq-${id}" type="number" min="0" max="99" value="${qty}"
+        onchange="setStock('${code}', this.value)"
+        onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault();}">
       <button class="inv-btn plus"  onclick="adjustStock('${code}',+1)">+</button>
     </div>`;
   }
@@ -631,10 +633,29 @@ window.adjustStock = function(code, delta) {
   const id = code.replace(/ /g, '_');
   const qtyEl = document.getElementById(`iq-${id}`);
   const chip  = document.getElementById(`ic-${id}`);
-  if (qtyEl) qtyEl.textContent = next;
+  if (qtyEl) qtyEl.value = next;
   if (chip)  chip.classList.toggle('has-stock', next > 0);
 
   // Debounced save
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await setDoc(doc(db, 'shop', 'inventory'), { stock }, { merge: false });
+      const saved = document.getElementById('shop-admin-saved');
+      if (saved) { saved.style.display = 'inline'; setTimeout(() => saved.style.display='none', 2000); }
+    } catch(e) { console.error('save error', e); }
+  }, 600);
+};
+
+window.setStock = function(code, val) {
+  const stock = window._shopStock;
+  const next = Math.max(0, parseInt(val) || 0);
+  stock[code] = next;
+  const id   = code.replace(/ /g, '_');
+  const chip = document.getElementById(`ic-${id}`);
+  const input = document.getElementById(`iq-${id}`);
+  if (chip)  chip.classList.toggle('has-stock', next > 0);
+  if (input) input.value = next;
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     try {
@@ -889,8 +910,15 @@ tbody td { padding:10px 14px; font-size:13px; }
 }
 .inv-chip.has-stock { border-color:rgba(48,192,96,0.35); }
 .inv-chip-code { font-family:'Barlow Condensed',sans-serif; font-size:12px; font-weight:700; color:var(--text); min-width:44px; }
-.inv-qty { font-family:'Bebas Neue',sans-serif; font-size:16px; color:var(--gold); min-width:20px; text-align:center; }
-.inv-chip.has-stock .inv-qty { color:var(--green); }
+.inv-input {
+  font-family:'Bebas Neue',sans-serif; font-size:16px; color:var(--gold);
+  width:36px; text-align:center; background:transparent; border:none; outline:none;
+  -moz-appearance:textfield; padding:0;
+}
+.inv-input::-webkit-outer-spin-button,
+.inv-input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+.inv-input:focus { background:rgba(255,255,255,0.06); border-radius:4px; color:white; }
+.inv-chip.has-stock .inv-input { color:var(--green); }
 .inv-btn {
   width:20px; height:20px; border-radius:4px; border:none; cursor:pointer;
   font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center;
