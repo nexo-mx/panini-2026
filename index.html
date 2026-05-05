@@ -2144,49 +2144,64 @@ async function renderShop() {
     }
   }
 
-  // Build available = in stock AND I'm missing
-  const available = [];
+  // All in-stock codes, split by missing (priority) vs already have
+  const inStock = [];
   for (const [code, qty] of Object.entries(stock)) {
-    if (qty > 0 && myMissing.has(code)) available.push({ code, qty });
+    if (qty > 0) inStock.push({ code, qty, missing: myMissing.has(code) });
   }
 
-  if (available.length === 0) {
+  if (inStock.length === 0) {
     container.innerHTML = `
       <div class="no-trades" style="padding:60px 20px;text-align:center;">
-        <div style="font-size:40px;margin-bottom:12px;">🎉</div>
-        <h3 style="font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:3px;color:#555;">Sin novedades por ahora</h3>
-        <p style="color:#444;font-size:13px;margin-top:6px;">No hay estampas en la tienda que te falten, o el inventario está vacío.</p>
+        <div style="font-size:40px;margin-bottom:12px;">📦</div>
+        <h3 style="font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:3px;color:#555;">Inventario vacío</h3>
+        <p style="color:#444;font-size:13px;margin-top:6px;">Próximamente habrá estampas disponibles.</p>
       </div>`;
     return;
   }
 
-  // Group by section
+  const missingCount = inStock.filter(x => x.missing).length;
+  const totalCount   = inStock.length;
+
+  // Group by section — missing first within each section
   let html = `<div style="margin-bottom:12px;padding:12px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
     <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">💵 Normal: <strong style="color:var(--green);">$5</strong></span>
-    <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">✨ Holograma/Escudo: <strong style="color:#d4a820);">$10</strong></span>
-    <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">📦 Disponibles: <strong style="color:var(--gold);">${available.length}</strong></span>
+    <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">✨ Holograma/Escudo: <strong style="color:#d4a820;">$10</strong></span>
+    <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">📦 Total: <strong style="color:var(--gold);">${totalCount}</strong></span>
+    <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">⭐ Te faltan: <strong style="color:var(--green);">${missingCount}</strong></span>
   </div>`;
 
+  function chipHtml({ code, qty, missing }) {
+    const holo = isHolo(code);
+    const price = holo ? 10 : 5;
+    const inCart = window._cart.some(c => c.code === code);
+    const owned  = !missing;
+    return `<div class="shop-chip ${owned ? 'owned' : ''}" id="schip-${code.replace(/ /g,'_')}" style="${owned ? 'opacity:0.45;' : ''}">
+      <span class="shop-chip-code">${holo ? '✨ ' : ''}${code}</span>
+      <span class="shop-chip-price" style="color:${owned?'#555':'var(--green)'};">$${price}</span>
+      <span class="shop-chip-qty">×${qty}</span>
+      ${owned
+        ? `<span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;color:#444;padding:4px 8px;">Ya la tienes</span>`
+        : `<button class="shop-chip-btn" style="${inCart ? 'background:var(--green);' : ''}"
+            onclick="toggleCart('${code}', ${price})">
+            ${inCart ? '✓ En carrito' : '+ Pedir'}
+          </button>`
+      }
+    </div>`;
+  }
+
   for (const sec of SECTIONS) {
-    const secAvail = available.filter(x => x.code.startsWith(sec.code + ' ') || (sec.id === 'FWC' && (x.code.startsWith('FWC ') || x.code.startsWith('00 '))) || (sec.id === 'CC' && x.code.startsWith('CC ')));
-    if (secAvail.length === 0) continue;
-    html += `<div class="shop-section-hdr">${sec.flag} ${sec.name} <span class="sh-count">${secAvail.length} disponibles</span></div>
-      <div class="shop-chips">`;
-    for (const { code, qty } of secAvail) {
-      const holo = isHolo(code);
-      const price = holo ? 10 : 5;
-      const inCart = window._cart.some(c => c.code === code);
-      html += `<div class="shop-chip" id="schip-${code.replace(/ /g,'_')}">
-        <span class="shop-chip-code">${holo ? '✨ ' : ''}${code}</span>
-        <span class="shop-chip-price">$${price}</span>
-        <span class="shop-chip-qty">×${qty}</span>
-        <button class="shop-chip-btn ${inCart ? 'in-cart' : ''}"
-          style="${inCart ? 'background:var(--green);' : ''}"
-          onclick="toggleCart('${code}', ${price})">
-          ${inCart ? '✓ En carrito' : '+ Pedir'}
-        </button>
-      </div>`;
-    }
+    // All in-stock for this section, missing first
+    const secStock = inStock
+      .filter(x => x.code.startsWith(sec.code + ' ') || (sec.id === 'FWC' && (x.code.startsWith('FWC ') || x.code.startsWith('00 '))) || (sec.id === 'CC' && x.code.startsWith('CC ')))
+      .sort((a, b) => b.missing - a.missing); // missing=true (1) first
+    if (secStock.length === 0) continue;
+    const secMissing = secStock.filter(x => x.missing).length;
+    html += `<div class="shop-section-hdr">${sec.flag} ${sec.name}
+      <span class="sh-count">${secStock.length} en stock${secMissing > 0 ? ` · <span style="color:var(--green);">${secMissing} te faltan</span>` : ''}</span>
+    </div>
+    <div class="shop-chips">`;
+    for (const item of secStock) html += chipHtml(item);
     html += `</div>`;
   }
   container.innerHTML = html;
