@@ -714,14 +714,8 @@ window._shopInventory = {};
 
 async function loadShopInventory() {
   try {
-    const [invSnap, specSnap] = await Promise.all([
-      getDoc(doc(db, 'shop', 'inventory')),
-      getDocs(collection(db, 'shop', 'specials', 'items'))
-    ]);
-    window._shopInventory = invSnap.exists() ? (invSnap.data().stock || {}) : {};
-    window._shopSpecials = [];
-    specSnap.forEach(d => window._shopSpecials.push({ id: d.id, ...d.data() }));
-    window._shopSpecials.sort((a,b) => b.ts - a.ts);
+    const snap = await getDoc(doc(db, 'shop', 'inventory'));
+    window._shopInventory = snap.exists() ? (snap.data().stock || {}) : {};
   } catch(e) { console.error('shop load error', e); }
 }
 
@@ -2168,7 +2162,6 @@ async function renderShop() {
 
   const missingCount = inStock.filter(x => x.missing).length;
   const totalCount   = inStock.length;
-  const specials     = window._shopSpecials || [];
 
   // Group by section — missing first within each section
   let html = `<div style="margin-bottom:12px;padding:12px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
@@ -2177,38 +2170,6 @@ async function renderShop() {
     <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">📦 Total: <strong style="color:var(--gold);">${totalCount}</strong></span>
     <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;">⭐ Te faltan: <strong style="color:var(--green);">${missingCount}</strong></span>
   </div>`;
-
-  // ── SPECIALS SECTION ──
-  if (specials.length > 0) {
-    html += `<div style="margin-bottom:20px;">
-      <div class="shop-section-hdr" style="color:#d4a820;border-bottom-color:rgba(212,168,32,0.3);">
-        ⭐ Estampas Especiales <span class="sh-count" style="color:#a07010;">${specials.length} disponibles</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:10px;">
-        ${specials.map(s => {
-          const waText = encodeURIComponent(\`Hola Nexo! Me interesa la estampa especial:\n\n⭐ \${s.code} — \${s.name}\nPrecio: $\${s.price}\n\nNombre: \${window.userProfile?.nickname || ''}\`);
-          const waLink = \`https://wa.me/\${NEXO_WA_NUMBER}?text=\${waText}\`;
-          return \`<div style="background:var(--surface);border:1px solid rgba(212,168,32,0.4);border-radius:12px;overflow:hidden;transition:all 0.2s;" onmouseover="this.style.borderColor='#d4a820'" onmouseout="this.style.borderColor='rgba(212,168,32,0.4)'">
-            <img src="\${s.imageB64}" style="width:100%;height:130px;object-fit:cover;display:block;">
-            <div style="padding:10px;">
-              <div style="font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:2px;color:#d4a820;">\${s.code}</div>
-              <div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;color:var(--text);margin:2px 0;">\${s.name}</div>
-              <div style="font-family:'Bebas Neue',sans-serif;font-size:24px;color:var(--green);margin-bottom:8px;">$\${s.price}</div>
-              <a href="\${waLink}" target="_blank"
-                style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:8px;
-                  background:rgba(37,211,102,0.15);border:1px solid rgba(37,211,102,0.35);border-radius:7px;
-                  text-decoration:none;font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;
-                  letter-spacing:1px;color:#25D366;transition:all 0.2s;"
-                onmouseover="this.style.background='rgba(37,211,102,0.25)'"
-                onmouseout="this.style.background='rgba(37,211,102,0.15)'">
-                💬 Pedir por WhatsApp
-              </a>
-            </div>
-          </div>\`;
-        }).join('')}
-      </div>
-    </div>`;
-  }`;
 
   function chipHtml({ code, qty, missing }) {
     const holo = isHolo(code);
