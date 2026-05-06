@@ -11,7 +11,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, collection, getDocs, doc, getDoc, setDoc, onSnapshot }
+import { getFirestore, collection, getDocs, doc, getDoc, setDoc, onSnapshot, addDoc, deleteDoc, updateDoc as firestoreUpdateDoc }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const ADMIN_UID = 'Q0Hz0gZzftZLQnwcmFQKp2Cy0hq2';
@@ -732,37 +732,226 @@ const QUICK_SECTIONS = [
   ...ADMIN_TEAMS.map(t => ({ id:t.code, name:t.name, flag:t.flag, codes: Array.from({length:20},(_,i)=>`${t.code} ${i+1}`) }))
 ];
 
-window.openQuickLoad = function() {
+let _qlCurrentTeam = null;
+let _voiceRecog    = null;
+let _voiceActive   = false;
+
+window.openQuickLoad = function(mode = 'add') {
+  window._qlMode = mode;
   const existing = document.getElementById('ql-overlay');
-  if (existing) existing.remove();
+  if (existing) { closeQuickLoad(); return; }
   const overlay = document.createElement('div');
   overlay.id = 'ql-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1000;display:flex;flex-direction:column;backdrop-filter:blur(6px);';
   overlay.innerHTML = `
-    <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;">
-      <span style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:#f0a020;">⚡ CARGA RÁPIDA</span>
-      <span style="font-family:'DM Mono',monospace;font-size:11px;color:#444;">Selecciona equipo → toca cada estampa para sumar</span>
-      <button onclick="document.getElementById('ql-overlay').remove()" style="margin-left:auto;background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+    <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <span id="ql-mode-title" style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:#f0a020;">⚡ CARGA RÁPIDA</span>
+      <span id="ql-mode-badge" style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;padding:3px 10px;border-radius:4px;background:rgba(240,160,32,0.15);color:#f0a020;border:1px solid rgba(240,160,32,0.3);">SUMAR +1</span>
+      <button onclick="closeQuickLoad()" style="margin-left:auto;background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
     </div>
     <div style="display:flex;flex:1;overflow:hidden;">
-      <div id="ql-team-list" style="width:160px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--bg);-webkit-overflow-scrolling:touch;">
+
+      <!-- Team list -->
+      <div id="ql-team-list" style="width:140px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--bg);-webkit-overflow-scrolling:touch;">
         ${QUICK_SECTIONS.map(s => `
           <div class="ql-team-item" onclick="selectQLTeam('${s.id}')" id="qlt-${s.id}"
-            style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;transition:background 0.15s;">
-            <span style="font-size:18px;">${s.flag}</span>
-            <span style="font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;">${s.name}</span>
+            style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;transition:background 0.15s;">
+            <span style="font-size:16px;">${s.flag}</span>
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;">${s.name}</span>
           </div>`).join('')}
       </div>
-      <div id="ql-sticker-panel" style="flex:1;overflow-y:auto;padding:16px;-webkit-overflow-scrolling:touch;">
-        <p style="color:#444;font-family:'DM Mono',monospace;font-size:12px;text-align:center;margin-top:40px;">← Selecciona un equipo</p>
+
+      <!-- Right side: stickers + input bar -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+
+        <!-- Sticker grid -->
+        <div id="ql-sticker-panel" style="flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch;">
+          <p style="color:#444;font-family:'DM Mono',monospace;font-size:12px;text-align:center;margin-top:40px;">← Selecciona un equipo</p>
+        </div>
+
+        <!-- Input bar: numpad + voice -->
+        <div id="ql-input-bar" style="border-top:1px solid var(--border);background:var(--surface);padding:12px 14px;flex-shrink:0;">
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#444;letter-spacing:2px;margin-bottom:10px;text-align:center;" id="ql-input-hint">Selecciona un equipo primero</div>
+
+          <!-- Number display -->
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+            <div id="ql-numpad-display"
+              style="flex:1;font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:4px;color:#f0a020;
+                background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+                padding:8px 16px;text-align:center;min-width:0;">
+              —
+            </div>
+            <!-- Voice button -->
+            <button id="ql-voice-btn" onclick="toggleVoice()"
+              style="width:56px;height:56px;border-radius:50%;border:2px solid var(--border);
+                background:var(--surface2);font-size:22px;cursor:pointer;transition:all 0.2s;flex-shrink:0;">
+              🎤
+            </button>
+          </div>
+
+          <!-- Numpad -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">
+            ${[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20].map(n =>
+              `<button onclick="qlNumInput(${n})"
+                style="font-family:'Bebas Neue',sans-serif;font-size:18px;padding:10px 4px;
+                  background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+                  color:#888;cursor:pointer;transition:all 0.15s;-webkit-tap-highlight-color:transparent;"
+                onmousedown="this.style.background='rgba(240,160,32,0.2)';this.style.color='#f0a020';"
+                onmouseup="this.style.background='var(--surface2)';this.style.color='#888';"
+                ontouchstart="this.style.background='rgba(240,160,32,0.2)';this.style.color='#f0a020';"
+                ontouchend="this.style.background='var(--surface2)';this.style.color='#888';">
+                ${n}
+              </button>`).join('')}
+            <button onclick="qlClearLast()"
+              style="font-family:'Bebas Neue',sans-serif;font-size:14px;padding:10px 4px;
+                background:rgba(224,64,64,0.1);border:1px solid rgba(224,64,64,0.3);border-radius:8px;
+                color:var(--red);cursor:pointer;grid-column:span 2;">
+              ✕ Borrar
+            </button>
+            <button onclick="qlSetAll(_qlCurrentTeam, 0)"
+              style="font-family:'Bebas Neue',sans-serif;font-size:12px;padding:10px 4px;
+                background:rgba(224,64,64,0.08);border:1px solid rgba(224,64,64,0.2);border-radius:8px;
+                color:#a04040;cursor:pointer;grid-column:span 2;letter-spacing:1px;">
+              VACIAR TODO
+            </button>
+          </div>
+        </div>
       </div>
     </div>`;
-  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
   document.body.appendChild(overlay);
+  // Update UI for mode
+  const title = document.getElementById('ql-mode-title');
+  const badge = document.getElementById('ql-mode-badge');
+  if (mode === 'sell') {
+    if (title) { title.textContent = '💸 VENTA RÁPIDA'; title.style.color = 'var(--red)'; }
+    if (badge) { badge.textContent = 'RESTAR -1'; badge.style.background='rgba(224,64,64,0.15)'; badge.style.color='var(--red)'; badge.style.borderColor='rgba(224,64,64,0.3)'; }
+  }
   selectQLTeam('MEX');
 };
 
+window.closeQuickLoad = function() {
+  stopVoice();
+  const overlay = document.getElementById('ql-overlay');
+  if (overlay) overlay.remove();
+};
+
+// Called when user taps a number on numpad or voice detects one
+window.qlNumInput = function(num) {
+  if (!_qlCurrentTeam) return;
+  const sec  = QUICK_SECTIONS.find(s => s.id === _qlCurrentTeam);
+  if (!sec)  return;
+  const code = sec.codes[num - 1]; // num is 1-based
+  if (!code) return;
+
+  const isSell = window._qlMode === 'sell';
+  const cur  = window._shopStock[code] || 0;
+  const next = isSell ? Math.max(0, cur - 1) : cur + 1;
+  window._shopStock[code] = next;
+  updateQLChip(code, next);
+  scheduleQLSave();
+
+  // Flash the display
+  const display = document.getElementById('ql-numpad-display');
+  if (display) {
+    display.textContent = `${num} → ×${next}`;
+    display.style.color = isSell ? 'var(--red)' : 'var(--green)';
+    setTimeout(() => { display.textContent = '—'; display.style.color = isSell ? 'var(--red)' : '#f0a020'; }, 900);
+  }
+  // Flash numpad button
+  const btn = document.querySelector(`#ql-input-bar button[onclick="qlNumInput(${num})"]`);
+  if (btn) {
+    btn.style.background = 'rgba(48,192,96,0.25)';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'rgba(48,192,96,0.5)';
+    setTimeout(() => { btn.style.background='var(--surface2)'; btn.style.color='#888'; btn.style.borderColor='var(--border)'; }, 600);
+  }
+};
+
+window.qlClearLast = function() {
+  const display = document.getElementById('ql-numpad-display');
+  if (display) { display.textContent = '—'; display.style.color = '#f0a020'; }
+};
+
+// ── VOICE INPUT ──────────────────────────────────────────────
+window.toggleVoice = function() {
+  if (_voiceActive) stopVoice();
+  else startVoice();
+};
+
+function startVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('Tu navegador no soporta dictado de voz. Usa Chrome en Android.'); return; }
+
+  _voiceRecog = new SR();
+  _voiceRecog.lang = 'es-MX';
+  _voiceRecog.continuous   = true;
+  _voiceRecog.interimResults = false;
+
+  _voiceRecog.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (!e.results[i].isFinal) continue;
+      const transcript = e.results[i][0].transcript.trim().toLowerCase();
+      // Parse numbers from spoken text (handles "tres", "3", "doce", "12", etc.)
+      const nums = parseSpokenNumbers(transcript);
+      nums.forEach(n => { if (n >= 1 && n <= 20) qlNumInput(n); });
+    }
+  };
+
+  _voiceRecog.onerror = (e) => {
+    if (e.error !== 'no-speech') stopVoice();
+  };
+
+  _voiceRecog.onend = () => {
+    // Restart automatically if still active
+    if (_voiceActive) {
+      try { _voiceRecog.start(); } catch(e) {}
+    }
+  };
+
+  _voiceRecog.start();
+  _voiceActive = true;
+
+  const btn = document.getElementById('ql-voice-btn');
+  if (btn) {
+    btn.style.background = 'rgba(224,64,64,0.2)';
+    btn.style.borderColor = 'rgba(224,64,64,0.6)';
+    btn.innerHTML = '⏹';
+    btn.title = 'Toca para detener';
+  }
+  const hint = document.getElementById('ql-input-hint');
+  if (hint) { hint.textContent = '🎤 Escuchando… di los números de las estampas'; hint.style.color = 'var(--red)'; }
+}
+
+function stopVoice() {
+  _voiceActive = false;
+  if (_voiceRecog) { try { _voiceRecog.stop(); } catch(e) {} _voiceRecog = null; }
+  const btn = document.getElementById('ql-voice-btn');
+  if (btn) { btn.style.background='var(--surface2)'; btn.style.borderColor='var(--border)'; btn.innerHTML='🎤'; }
+  const hint = document.getElementById('ql-input-hint');
+  if (hint) { hint.textContent = `${_qlCurrentTeam ? 'Di o teclea el número de la estampa' : 'Selecciona un equipo primero'}`; hint.style.color='#444'; }
+}
+
+function parseSpokenNumbers(text) {
+  const wordMap = {
+    'uno':1,'dos':2,'tres':3,'cuatro':4,'cinco':5,'seis':6,'siete':7,'ocho':8,
+    'nueve':9,'diez':10,'once':11,'doce':12,'trece':13,'catorce':14,'quince':15,
+    'dieciséis':16,'dieciseis':16,'diecisiete':17,'dieciocho':18,'diecinueve':19,'veinte':20,
+    'one':1,'two':2,'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,
+    'nine':9,'ten':10,'eleven':11,'twelve':12,'thirteen':13,'fourteen':14,'fifteen':15,
+    'sixteen':16,'seventeen':17,'eighteen':18,'nineteen':19,'twenty':20
+  };
+  const nums = [];
+  // Digits
+  const digits = text.match(/\b([1-9]|1\d|20)\b/g);
+  if (digits) digits.forEach(d => nums.push(parseInt(d)));
+  // Words
+  const words = text.split(/[\s,yand]+/);
+  words.forEach(w => { if (wordMap[w]) nums.push(wordMap[w]); });
+  return [...new Set(nums)];
+}
+
 window.selectQLTeam = function(id) {
+  _qlCurrentTeam = id;
   document.querySelectorAll('.ql-team-item').forEach(el => el.style.background = '');
   const selected = document.getElementById(`qlt-${id}`);
   if (selected) selected.style.background = 'rgba(240,160,32,0.12)';
@@ -770,6 +959,8 @@ window.selectQLTeam = function(id) {
   if (!sec) return;
   const panel = document.getElementById('ql-sticker-panel');
   if (!panel) return;
+  const hint = document.getElementById('ql-input-hint');
+  if (hint && !_voiceActive) { hint.textContent = `Di o teclea el número de estampa de ${sec.name}`; hint.style.color='#666'; }
   const stock = window._shopStock;
   let html = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
@@ -797,10 +988,9 @@ window.selectQLTeam = function(id) {
 };
 
 window.qlTap = function(code) {
-  const next = (window._shopStock[code] || 0) + 1;
-  window._shopStock[code] = next;
-  updateQLChip(code, next);
-  scheduleQLSave();
+  // Extract number from code (e.g. "MEX 7" → 7) and use qlNumInput
+  const num = parseInt(code.split(' ').pop());
+  if (!isNaN(num)) qlNumInput(num);
 };
 
 window.qlSetAll = function(teamId, val) {
@@ -1089,6 +1279,166 @@ window.closeScanner = function() {
   const overlay = document.getElementById('scanner-overlay');
   if (overlay) overlay.remove();
 };
+
+// ═══════════════════════════════════════════════════════════════
+// ESTAMPAS ESPECIALES
+// ═══════════════════════════════════════════════════════════════
+window.openSpecialsAdmin = async function() {
+  const existing = document.getElementById('specials-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'specials-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1000;display:flex;flex-direction:column;backdrop-filter:blur(6px);';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;">
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:#d4a820;">⭐ ESTAMPAS ESPECIALES</span>
+      <button onclick="document.getElementById('specials-overlay').remove()" style="margin-left:auto;background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:20px;-webkit-overflow-scrolling:touch;">
+
+      <!-- Add new special -->
+      <div style="background:var(--surface);border:1px solid rgba(212,168,32,0.3);border-radius:12px;padding:18px;margin-bottom:20px;">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:3px;color:#d4a820;margin-bottom:14px;">+ AGREGAR ESTAMPA ESPECIAL</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+          <div>
+            <label style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;display:block;margin-bottom:5px;">CÓDIGO (ej: ARG 14)</label>
+            <input id="sp-code" type="text" placeholder="ARG 14"
+              style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:1px;outline:none;text-transform:uppercase;">
+          </div>
+          <div>
+            <label style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;display:block;margin-bottom:5px;">NOMBRE</label>
+            <input id="sp-name" type="text" placeholder="Lionel Messi"
+              style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-family:'Barlow',sans-serif;font-size:13px;outline:none;">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+          <div>
+            <label style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;display:block;margin-bottom:5px;">PRECIO ($)</label>
+            <input id="sp-price" type="number" placeholder="50" min="1"
+              style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-family:'Bebas Neue',sans-serif;font-size:20px;outline:none;">
+          </div>
+          <div>
+            <label style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;display:block;margin-bottom:5px;">FOTO</label>
+            <input id="sp-photo" type="file" accept="image/*"
+              style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:7px 10px;color:#888;font-family:'Barlow Condensed',sans-serif;font-size:12px;cursor:pointer;">
+          </div>
+        </div>
+        <!-- Preview -->
+        <div id="sp-preview" style="display:none;margin-bottom:12px;text-align:center;">
+          <img id="sp-preview-img" style="max-height:140px;border-radius:8px;border:1px solid var(--border);">
+        </div>
+        <button onclick="saveSpecial()"
+          style="width:100%;font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:3px;padding:12px;
+            background:linear-gradient(135deg,#a07010,#d4a820);color:#000;border:none;border-radius:8px;cursor:pointer;">
+          ⭐ Guardar Especial
+        </button>
+      </div>
+
+      <!-- Existing specials -->
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:3px;color:#555;margin-bottom:12px;">ESPECIALES ACTUALES</div>
+      <div id="specials-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;">
+        <p style="color:#444;font-size:12px;">Cargando…</p>
+      </div>
+    </div>`;
+
+  // Photo preview
+  overlay.querySelector('#sp-photo').addEventListener('change', function() {
+    const file = this.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      document.getElementById('sp-preview').style.display = 'block';
+      document.getElementById('sp-preview-img').src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  document.body.appendChild(overlay);
+  loadSpecialsList();
+};
+
+async function loadSpecialsList() {
+  const listEl = document.getElementById('specials-list');
+  if (!listEl) return;
+  try {
+    const snap = await getDocs(collection(db, 'shop', 'specials', 'items'));
+    if (snap.empty) { listEl.innerHTML = '<p style="color:#444;font-size:12px;font-style:italic;">No hay especiales aún.</p>'; return; }
+    listEl.innerHTML = '';
+    snap.forEach(d => {
+      const s = d.data();
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--surface);border:1px solid rgba(212,168,32,0.3);border-radius:10px;overflow:hidden;position:relative;';
+      card.innerHTML = `
+        <img src="${s.imageB64}" style="width:100%;height:120px;object-fit:cover;display:block;">
+        <div style="padding:10px;">
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;color:#d4a820;">${s.code}</div>
+          <div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:var(--text);margin:2px 0;">${s.name}</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--green);">$${s.price}</div>
+          <button onclick="deleteSpecial('${d.id}')"
+            style="width:100%;margin-top:8px;padding:6px;background:rgba(224,64,64,0.1);border:1px solid rgba(224,64,64,0.3);
+              border-radius:6px;color:var(--red);font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;
+              letter-spacing:1px;cursor:pointer;">
+            🗑 Eliminar
+          </button>
+        </div>`;
+      listEl.appendChild(card);
+    });
+  } catch(e) { listEl.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`; }
+}
+
+window.saveSpecial = async function() {
+  const code  = document.getElementById('sp-code')?.value.trim().toUpperCase();
+  const name  = document.getElementById('sp-name')?.value.trim();
+  const price = parseInt(document.getElementById('sp-price')?.value);
+  const file  = document.getElementById('sp-photo')?.files[0];
+
+  if (!code || !name || !price || !file) { showStatus('⚠️ Completa todos los campos'); return; }
+
+  showStatus('Comprimiendo imagen…');
+  try {
+    const imageB64 = await compressImage(file, 600, 0.75);
+    await addDoc(collection(db, 'shop', 'specials', 'items'), {
+      code, name, price, imageB64, ts: Date.now()
+    });
+    // Clear form
+    document.getElementById('sp-code').value  = '';
+    document.getElementById('sp-name').value  = '';
+    document.getElementById('sp-price').value = '';
+    document.getElementById('sp-photo').value = '';
+    document.getElementById('sp-preview').style.display = 'none';
+    showStatus('✅ Especial guardada');
+    loadSpecialsList();
+  } catch(e) { showStatus('❌ Error: ' + e.message); }
+};
+
+window.deleteSpecial = async function(id) {
+  if (!confirm('¿Eliminar esta estampa especial?')) return;
+  try {
+    await deleteDoc(doc(db, 'shop', 'specials', 'items', id));
+    showStatus('🗑 Eliminada');
+    loadSpecialsList();
+  } catch(e) { showStatus('❌ Error: ' + e.message); }
+};
+
+function compressImage(file, maxSize, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let w = img.width, h = img.height;
+      if (w > h && w > maxSize) { h = h * maxSize / w; w = maxSize; }
+      else if (h > maxSize)     { w = w * maxSize / h; h = maxSize; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
 
 </script>
 
@@ -1471,8 +1821,10 @@ tbody td { padding:10px 14px; font-size:13px; }
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
       <button onclick="loadAndRenderShopAdmin()" class="btn-refresh">↻ Recargar</button>
       <button onclick="exportShopText()" class="btn-refresh" style="color:var(--green);border-color:rgba(48,192,96,0.4);">📋 Exportar stock</button>
-      <button onclick="openQuickLoad()" class="btn-refresh" style="color:#f0a020;border-color:rgba(240,160,32,0.4);">⚡ Carga Rápida</button>
+      <button onclick="openQuickLoad('add')" class="btn-refresh" style="color:#f0a020;border-color:rgba(240,160,32,0.4);">⚡ Carga Rápida</button>
+      <button onclick="openQuickLoad('sell')" class="btn-refresh" style="color:var(--red);border-color:rgba(224,64,64,0.4);">💸 Venta Rápida</button>
       <button onclick="openScanner()" class="btn-refresh" style="color:#60d0ff;border-color:rgba(96,208,255,0.4);">📷 Escanear</button>
+      <button onclick="openSpecialsAdmin()" class="btn-refresh" style="color:#d4a820;border-color:rgba(212,168,32,0.4);">⭐ Especiales</button>
       <span id="shop-admin-saved" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--green);display:none;">✓ Guardado</span>
     </div>
     <div class="panel" id="shop-admin-panel">
