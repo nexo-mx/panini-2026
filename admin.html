@@ -6,6 +6,7 @@
 <title>Nexo — Admin</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 
+<script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
@@ -721,6 +722,374 @@ window.exportShopText = function() {
 window.loadAndRenderShopAdmin = loadAndRenderShopAdmin;
 
 
+
+// ═══════════════════════════════════════════════════════════════
+// CARGA RÁPIDA — selecciona equipo, tap por tap
+// ═══════════════════════════════════════════════════════════════
+const QUICK_SECTIONS = [
+  { id:'FWC', name:'Introducción / FWC', flag:'🏆', codes: ['00 1', ...Array.from({length:19},(_,i)=>`FWC ${i+1}`)] },
+  { id:'CC',  name:'Coca-Cola',          flag:'🥤', codes: Array.from({length:14},(_,i)=>`CC ${i+1}`) },
+  ...ADMIN_TEAMS.map(t => ({ id:t.code, name:t.name, flag:t.flag, codes: Array.from({length:20},(_,i)=>`${t.code} ${i+1}`) }))
+];
+
+window.openQuickLoad = function() {
+  const existing = document.getElementById('ql-overlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ql-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1000;display:flex;flex-direction:column;backdrop-filter:blur(6px);';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;">
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:#f0a020;">⚡ CARGA RÁPIDA</span>
+      <span style="font-family:'DM Mono',monospace;font-size:11px;color:#444;">Selecciona equipo → toca cada estampa para sumar</span>
+      <button onclick="document.getElementById('ql-overlay').remove()" style="margin-left:auto;background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+    </div>
+    <div style="display:flex;flex:1;overflow:hidden;">
+      <div id="ql-team-list" style="width:160px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--bg);-webkit-overflow-scrolling:touch;">
+        ${QUICK_SECTIONS.map(s => `
+          <div class="ql-team-item" onclick="selectQLTeam('${s.id}')" id="qlt-${s.id}"
+            style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;transition:background 0.15s;">
+            <span style="font-size:18px;">${s.flag}</span>
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;">${s.name}</span>
+          </div>`).join('')}
+      </div>
+      <div id="ql-sticker-panel" style="flex:1;overflow-y:auto;padding:16px;-webkit-overflow-scrolling:touch;">
+        <p style="color:#444;font-family:'DM Mono',monospace;font-size:12px;text-align:center;margin-top:40px;">← Selecciona un equipo</p>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  selectQLTeam('MEX');
+};
+
+window.selectQLTeam = function(id) {
+  document.querySelectorAll('.ql-team-item').forEach(el => el.style.background = '');
+  const selected = document.getElementById(`qlt-${id}`);
+  if (selected) selected.style.background = 'rgba(240,160,32,0.12)';
+  const sec = QUICK_SECTIONS.find(s => s.id === id);
+  if (!sec) return;
+  const panel = document.getElementById('ql-sticker-panel');
+  if (!panel) return;
+  const stock = window._shopStock;
+  let html = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;color:white;">${sec.flag} ${sec.name}</span>
+      <button onclick="qlSetAll('${id}', 0)" style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;padding:5px 12px;background:rgba(224,64,64,0.15);color:var(--red);border:1px solid rgba(224,64,64,0.35);border-radius:5px;cursor:pointer;">✕ Vaciar</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px;">`;
+  for (const code of sec.codes) {
+    const qty  = stock[code] || 0;
+    const holo = isHoloAdmin(code);
+    const num  = code.split(' ').slice(1).join(' ');
+    const bg     = qty===0?'var(--surface2)':qty===1?'rgba(48,192,96,0.2)':qty===2?'rgba(48,128,232,0.2)':'rgba(255,96,48,0.2)';
+    const border = qty===0?'var(--border)'  :qty===1?'rgba(48,192,96,0.5)' :qty===2?'rgba(48,128,232,0.5)' :'rgba(255,96,48,0.5)';
+    const color  = qty===0?'#555':qty===1?'var(--green)':qty===2?'var(--blue)':'var(--orange)';
+    html += `
+      <div id="qlc-${code.replace(/ /g,'_')}" onclick="qlTap('${code}')"
+        style="background:${bg};border:2px solid ${border};border-radius:10px;padding:10px 6px;
+          text-align:center;cursor:pointer;transition:all 0.12s;user-select:none;-webkit-tap-highlight-color:transparent;">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:11px;letter-spacing:1px;color:#555;margin-bottom:4px;">${holo?'✨':''} ${num}</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;line-height:1;color:${color};">${qty}</div>
+      </div>`;
+  }
+  html += `</div>`;
+  panel.innerHTML = html;
+};
+
+window.qlTap = function(code) {
+  const next = (window._shopStock[code] || 0) + 1;
+  window._shopStock[code] = next;
+  updateQLChip(code, next);
+  scheduleQLSave();
+};
+
+window.qlSetAll = function(teamId, val) {
+  const sec = QUICK_SECTIONS.find(s => s.id === teamId);
+  if (!sec) return;
+  sec.codes.forEach(code => { window._shopStock[code] = val; updateQLChip(code, val); });
+  scheduleQLSave();
+};
+
+function updateQLChip(code, qty) {
+  const el = document.getElementById(`qlc-${code.replace(/ /g,'_')}`);
+  if (el) {
+    const bg     = qty===0?'var(--surface2)':qty===1?'rgba(48,192,96,0.2)':qty===2?'rgba(48,128,232,0.2)':'rgba(255,96,48,0.2)';
+    const border = qty===0?'var(--border)'  :qty===1?'rgba(48,192,96,0.5)' :qty===2?'rgba(48,128,232,0.5)' :'rgba(255,96,48,0.5)';
+    const color  = qty===0?'#555':qty===1?'var(--green)':qty===2?'var(--blue)':'var(--orange)';
+    el.style.background  = bg;
+    el.style.borderColor = border;
+    el.querySelector('div:last-child').style.color = color;
+    el.querySelector('div:last-child').textContent = qty;
+  }
+  const mainInput = document.getElementById(`iq-${code.replace(/ /g,'_')}`);
+  const mainChip  = document.getElementById(`ic-${code.replace(/ /g,'_')}`);
+  if (mainInput) mainInput.value = qty;
+  if (mainChip)  mainChip.classList.toggle('has-stock', qty > 0);
+}
+
+let _qlSaveTimer = null;
+function scheduleQLSave() {
+  clearTimeout(_qlSaveTimer);
+  _qlSaveTimer = setTimeout(async () => {
+    try {
+      await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
+      const saved = document.getElementById('shop-admin-saved');
+      if (saved) { saved.style.display='inline'; setTimeout(()=>saved.style.display='none',2000); }
+    } catch(e) { console.error(e); }
+  }, 800);
+}
+
+window.openQuickLoad   = window.openQuickLoad;
+window.selectQLTeam    = window.selectQLTeam;
+window.qlTap           = window.qlTap;
+window.qlSetAll        = window.qlSetAll;
+
+// ═══════════════════════════════════════════════════════════════
+// ESCÁNER OCR — lee nomenclatura de estampas con la cámara
+// ═══════════════════════════════════════════════════════════════
+const VALID_CODES_SET = new Set([
+  '00 1',
+  ...Array.from({length:19}, (_,i) => `FWC ${i+1}`),
+  ...Array.from({length:14}, (_,i) => `CC ${i+1}`),
+  ...ADMIN_TEAMS.flatMap(t => Array.from({length:20}, (_,i) => `${t.code} ${i+1}`))
+]);
+
+let _scanStream    = null;
+let _scanWorker    = null;
+let _scanActive    = false;
+let _scanLoop      = null;
+let _lastDetected  = null;
+let _confirmTimer  = null;
+
+window.openScanner = async function() {
+  const existing = document.getElementById('scanner-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'scanner-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000;z-index:2000;display:flex;flex-direction:column;';
+  overlay.innerHTML = `
+    <div style="padding:14px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;background:rgba(0,0,0,0.8);border-bottom:1px solid #222;">
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:#60d0ff;">📷 ESCÁNER</span>
+      <span id="scan-status" style="font-family:'DM Mono',monospace;font-size:11px;color:#555;">Iniciando cámara…</span>
+      <button onclick="closeScanner()" style="margin-left:auto;background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+    </div>
+
+    <!-- Video feed -->
+    <div style="position:relative;flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;">
+      <video id="scan-video" autoplay playsinline muted
+        style="width:100%;height:100%;object-fit:cover;"></video>
+      <!-- Targeting reticle -->
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+        <div style="width:280px;height:100px;border:2px solid rgba(96,208,255,0.7);border-radius:8px;box-shadow:0 0 0 2000px rgba(0,0,0,0.45);">
+          <div style="position:absolute;top:-1px;left:-1px;width:20px;height:20px;border-top:3px solid #60d0ff;border-left:3px solid #60d0ff;border-radius:4px 0 0 0;"></div>
+          <div style="position:absolute;top:-1px;right:-1px;width:20px;height:20px;border-top:3px solid #60d0ff;border-right:3px solid #60d0ff;border-radius:0 4px 0 0;"></div>
+          <div style="position:absolute;bottom:-1px;left:-1px;width:20px;height:20px;border-bottom:3px solid #60d0ff;border-left:3px solid #60d0ff;border-radius:0 0 0 4px;"></div>
+          <div style="position:absolute;bottom:-1px;right:-1px;width:20px;height:20px;border-bottom:3px solid #60d0ff;border-right:3px solid #60d0ff;border-radius:0 0 4px 0;"></div>
+        </div>
+      </div>
+      <!-- Confirm overlay -->
+      <div id="scan-confirm" style="display:none;position:absolute;inset:0;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;flex-direction:column;gap:16px;">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:3px;color:#aaa;">¿ES ESTA ESTAMPA?</div>
+        <div id="scan-detected-code" style="font-family:'Bebas Neue',sans-serif;font-size:52px;letter-spacing:4px;color:#60d0ff;text-align:center;"></div>
+        <div id="scan-current-qty" style="font-family:'DM Mono',monospace;font-size:13px;color:#555;"></div>
+        <div style="display:flex;gap:16px;margin-top:8px;">
+          <button onclick="scanConfirm(false)"
+            style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:2px;padding:14px 32px;background:rgba(224,64,64,0.2);color:var(--red);border:2px solid rgba(224,64,64,0.5);border-radius:10px;cursor:pointer;min-width:120px;">
+            ✕ No
+          </button>
+          <button onclick="scanConfirm(true)"
+            style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:2px;padding:14px 32px;background:rgba(48,192,96,0.2);color:var(--green);border:2px solid rgba(48,192,96,0.5);border-radius:10px;cursor:pointer;min-width:120px;">
+            ✓ Sí +1
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log of scanned stickers -->
+    <div style="background:rgba(0,0,0,0.9);border-top:1px solid #222;padding:10px 16px;flex-shrink:0;max-height:140px;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+      <div style="font-family:'DM Mono',monospace;font-size:10px;color:#333;letter-spacing:2px;margin-bottom:6px;">ESCANEADAS EN ESTA SESIÓN</div>
+      <div id="scan-log" style="display:flex;flex-wrap:wrap;gap:6px;">
+        <span style="font-family:'DM Mono',monospace;font-size:11px;color:#333;font-style:italic;">Ninguna aún…</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  // Start camera
+  try {
+    _scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    const video = document.getElementById('scan-video');
+    video.srcObject = _scanStream;
+    await video.play();
+    setScanStatus('Apunta a la nomenclatura de la estampa', '#60d0ff');
+
+    // Init Tesseract worker
+    _scanWorker = await Tesseract.createWorker('eng', 1, {
+      logger: () => {}
+    });
+    await _scanWorker.setParameters({
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
+      tessedit_pageseg_mode: '7', // single line
+    });
+
+    _scanActive = true;
+    startScanLoop();
+  } catch(e) {
+    setScanStatus('Error: ' + e.message, 'var(--red)');
+  }
+};
+
+function setScanStatus(msg, color = '#555') {
+  const el = document.getElementById('scan-status');
+  if (el) { el.textContent = msg; el.style.color = color; }
+}
+
+function startScanLoop() {
+  const video   = document.getElementById('scan-video');
+  const canvas  = document.createElement('canvas');
+  const ctx     = canvas.getContext('2d');
+  let processing = false;
+
+  async function frame() {
+    if (!_scanActive) return;
+    _scanLoop = requestAnimationFrame(frame);
+    if (processing || !video || video.readyState < 2) return;
+
+    // Only process every 800ms to not kill the CPU
+    if (frame._lastTime && Date.now() - frame._lastTime < 800) return;
+    frame._lastTime = Date.now();
+    processing = true;
+
+    try {
+      // Crop to the reticle area (center 280×100)
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const cropW = Math.round(vw * 0.55);
+      const cropH = Math.round(vh * 0.22);
+      const cropX = Math.round((vw - cropW) / 2);
+      const cropY = Math.round((vh - cropH) / 2);
+
+      canvas.width  = cropW;
+      canvas.height = cropH;
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+      // Enhance contrast for better OCR
+      ctx.filter = 'contrast(2) brightness(1.2)';
+      ctx.drawImage(canvas, 0, 0);
+
+      const { data: { text } } = await _scanWorker.recognize(canvas);
+      const detected = parseCode(text);
+
+      if (detected && detected !== _lastDetected) {
+        _lastDetected = detected;
+        showScanConfirm(detected);
+      }
+    } catch(e) {}
+    processing = false;
+  }
+  requestAnimationFrame(frame);
+}
+
+function parseCode(rawText) {
+  // Clean and normalize
+  const text = rawText.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Try to match known patterns: 2-3 letters + space + 1-2 digits
+  const matches = text.match(/\b([A-Z]{2,3})\s*(\d{1,2})\b/g);
+  if (!matches) return null;
+
+  for (const m of matches) {
+    const normalized = m.replace(/\s+/,' ').trim();
+    const parts = normalized.match(/^([A-Z]{2,3})\s*(\d{1,2})$/);
+    if (!parts) continue;
+    const candidate = `${parts[1]} ${parseInt(parts[2])}`;
+    if (VALID_CODES_SET.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+function showScanConfirm(code) {
+  const confirmEl = document.getElementById('scan-confirm');
+  const codeEl    = document.getElementById('scan-detected-code');
+  const qtyEl     = document.getElementById('scan-current-qty');
+  if (!confirmEl || !codeEl) return;
+
+  const currentQty = window._shopStock[code] || 0;
+  codeEl.textContent = code;
+  qtyEl.textContent  = `Stock actual: ${currentQty}`;
+  confirmEl.style.display = 'flex';
+
+  // Auto-confirm after 3s if user doesn't tap
+  clearTimeout(_confirmTimer);
+  _confirmTimer = setTimeout(() => scanConfirm(true), 3000);
+}
+
+window.scanConfirm = function(yes) {
+  clearTimeout(_confirmTimer);
+  const confirmEl = document.getElementById('scan-confirm');
+  const codeEl    = document.getElementById('scan-detected-code');
+  if (confirmEl) confirmEl.style.display = 'none';
+
+  if (yes && _lastDetected) {
+    const code = _lastDetected;
+    const next = (window._shopStock[code] || 0) + 1;
+    window._shopStock[code] = next;
+
+    // Update main grid if visible
+    const mainInput = document.getElementById(`iq-${code.replace(/ /g,'_')}`);
+    const mainChip  = document.getElementById(`ic-${code.replace(/ /g,'_')}`);
+    if (mainInput) mainInput.value = next;
+    if (mainChip)  mainChip.classList.toggle('has-stock', next > 0);
+
+    // Add to session log
+    addToScanLog(code, next);
+
+    // Save debounced
+    scheduleQLSave();
+
+    // Flash green feedback
+    setScanStatus(`✓ ${code} → ×${next}`, 'var(--green)');
+    setTimeout(() => setScanStatus('Apunta a la siguiente estampa', '#60d0ff'), 1500);
+  } else {
+    setScanStatus('Apunta a la estampa', '#60d0ff');
+  }
+
+  _lastDetected = null;
+};
+
+function addToScanLog(code, qty) {
+  const log = document.getElementById('scan-log');
+  if (!log) return;
+  // Remove "ninguna" placeholder
+  const placeholder = log.querySelector('span[style*="font-style:italic"]');
+  if (placeholder) placeholder.remove();
+
+  const existing = log.querySelector(`[data-code="${code}"]`);
+  if (existing) {
+    existing.textContent = `${code} ×${qty}`;
+  } else {
+    const chip = document.createElement('span');
+    chip.dataset.code = code;
+    chip.textContent  = `${code} ×${qty}`;
+    chip.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;padding:3px 8px;background:rgba(96,208,255,0.12);border:1px solid rgba(96,208,255,0.3);border-radius:4px;color:#60d0ff;';
+    log.appendChild(chip);
+  }
+}
+
+window.closeScanner = function() {
+  _scanActive = false;
+  clearTimeout(_confirmTimer);
+  if (_scanLoop) cancelAnimationFrame(_scanLoop);
+  if (_scanStream) { _scanStream.getTracks().forEach(t => t.stop()); _scanStream = null; }
+  if (_scanWorker) { _scanWorker.terminate(); _scanWorker = null; }
+  _lastDetected = null;
+  const overlay = document.getElementById('scanner-overlay');
+  if (overlay) overlay.remove();
+};
+
 </script>
 
 <style>
@@ -1102,6 +1471,8 @@ tbody td { padding:10px 14px; font-size:13px; }
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
       <button onclick="loadAndRenderShopAdmin()" class="btn-refresh">↻ Recargar</button>
       <button onclick="exportShopText()" class="btn-refresh" style="color:var(--green);border-color:rgba(48,192,96,0.4);">📋 Exportar stock</button>
+      <button onclick="openQuickLoad()" class="btn-refresh" style="color:#f0a020;border-color:rgba(240,160,32,0.4);">⚡ Carga Rápida</button>
+      <button onclick="openScanner()" class="btn-refresh" style="color:#60d0ff;border-color:rgba(96,208,255,0.4);">📷 Escanear</button>
       <span id="shop-admin-saved" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--green);display:none;">✓ Guardado</span>
     </div>
     <div class="panel" id="shop-admin-panel">
