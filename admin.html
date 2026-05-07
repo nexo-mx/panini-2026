@@ -1280,7 +1280,7 @@ async function loadSpecialsList() {
   const listEl = document.getElementById('specials-list');
   if (!listEl) return;
   try {
-    const snap = await getDocs(collection(db, 'shop', 'specials', 'items'));
+    const snap = await getDocs(collection(db, 'shopSpecials'));
     if (snap.empty) { listEl.innerHTML = '<p style="color:#444;font-size:12px;font-style:italic;">No hay especiales aún.</p>'; return; }
     listEl.innerHTML = '';
     snap.forEach(d => {
@@ -1316,7 +1316,7 @@ window.saveSpecial = async function() {
   showStatus('Comprimiendo imagen…');
   try {
     const imageB64 = await compressImage(file, 600, 0.75);
-    await addDoc(collection(db, 'shop', 'specials', 'items'), {
+    await addDoc(collection(db, 'shopSpecials'), {
       code, name, price, imageB64, ts: Date.now()
     });
     // Clear form
@@ -1333,7 +1333,7 @@ window.saveSpecial = async function() {
 window.deleteSpecial = async function(id) {
   if (!confirm('¿Eliminar esta estampa especial?')) return;
   try {
-    await deleteDoc(doc(db, 'shop', 'specials', 'items', id));
+    await deleteDoc(doc(db, 'shopSpecials', id));
     showStatus('🗑 Eliminada');
     loadSpecialsList();
   } catch(e) { showStatus('❌ Error: ' + e.message); }
