@@ -713,16 +713,18 @@ const NEXO_WA_NUMBER  = '524621497740'; // ← CAMBIA ESTO por tu WhatsApp real
 window._shopInventory = {};
 
 async function loadShopInventory() {
+  // Load inventory
   try {
-    const [invSnap, specSnap] = await Promise.all([
-      getDoc(doc(db, 'shop', 'inventory')),
-      getDocs(collection(db, 'shop', 'specials', 'items'))
-    ]);
+    const invSnap = await getDoc(doc(db, 'shop', 'inventory'));
     window._shopInventory = invSnap.exists() ? (invSnap.data().stock || {}) : {};
+  } catch(e) { console.error('inventory load error', e); window._shopInventory = {}; }
+  // Load specials separately so inventory still works if specials fail
+  try {
+    const specSnap = await getDocs(collection(db, 'shop', 'specials', 'items'));
     window._shopSpecials = [];
     specSnap.forEach(d => window._shopSpecials.push({ id: d.id, ...d.data() }));
     window._shopSpecials.sort((a,b) => b.ts - a.ts);
-  } catch(e) { console.error('shop load error', e); }
+  } catch(e) { console.error('specials load error', e); window._shopSpecials = []; }
 }
 
 async function saveShopInventory(stock) {
@@ -2202,18 +2204,14 @@ async function renderShop() {
     const holo = isHolo(code);
     const price = holo ? 10 : 5;
     const inCart = window._cart.some(c => c.code === code);
-    const owned  = !missing;
-    return `<div class="shop-chip ${owned ? 'owned' : ''}" id="schip-${code.replace(/ /g,'_')}" style="${owned ? 'opacity:0.45;' : ''}">
+    return `<div class="shop-chip" id="schip-${code.replace(/ /g,'_')}" style="${!missing ? 'opacity:0.55;' : ''}">
       <span class="shop-chip-code">${holo ? '✨ ' : ''}${code}</span>
-      <span class="shop-chip-price" style="color:${owned?'#555':'var(--green)'};">$${price}</span>
+      <span class="shop-chip-price">$${price}</span>
       <span class="shop-chip-qty">×${qty}</span>
-      ${owned
-        ? `<span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;color:#444;padding:4px 8px;">Ya la tienes</span>`
-        : `<button class="shop-chip-btn" style="${inCart ? 'background:var(--green);' : ''}"
-            onclick="toggleCart('${code}', ${price})">
-            ${inCart ? '✓ En carrito' : '+ Pedir'}
-          </button>`
-      }
+      <button class="shop-chip-btn" style="${inCart ? 'background:var(--green);' : ''}"
+          onclick="toggleCart('${code}', ${price})">
+          ${inCart ? '✓ En carrito' : !missing ? 'Repetida' : '+ Pedir'}
+      </button>
     </div>`;
   }
 
