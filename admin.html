@@ -781,12 +781,7 @@ window.openQuickLoad = function(mode = 'add') {
                 padding:8px 16px;text-align:center;min-width:0;">
               —
             </div>
-            <!-- Voice button -->
-            <button id="ql-voice-btn" onclick="toggleVoice()"
-              style="width:56px;height:56px;border-radius:50%;border:2px solid var(--border);
-                background:var(--surface2);font-size:22px;cursor:pointer;transition:all 0.2s;flex-shrink:0;">
-              🎤
-            </button>
+  
           </div>
 
           <!-- Numpad -->
@@ -830,7 +825,6 @@ window.openQuickLoad = function(mode = 'add') {
 };
 
 window.closeQuickLoad = function() {
-  stopVoice();
   const overlay = document.getElementById('ql-overlay');
   if (overlay) overlay.remove();
 };
@@ -872,83 +866,7 @@ window.qlClearLast = function() {
   if (display) { display.textContent = '—'; display.style.color = '#f0a020'; }
 };
 
-// ── VOICE INPUT ──────────────────────────────────────────────
-window.toggleVoice = function() {
-  if (_voiceActive) stopVoice();
-  else startVoice();
-};
 
-function startVoice() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { alert('Tu navegador no soporta dictado de voz. Usa Chrome en Android.'); return; }
-
-  _voiceRecog = new SR();
-  _voiceRecog.lang = 'es-MX';
-  _voiceRecog.continuous   = true;
-  _voiceRecog.interimResults = false;
-
-  _voiceRecog.onresult = (e) => {
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (!e.results[i].isFinal) continue;
-      const transcript = e.results[i][0].transcript.trim().toLowerCase();
-      // Parse numbers from spoken text (handles "tres", "3", "doce", "12", etc.)
-      const nums = parseSpokenNumbers(transcript);
-      nums.forEach(n => { if (n >= 1 && n <= 20) qlNumInput(n); });
-    }
-  };
-
-  _voiceRecog.onerror = (e) => {
-    if (e.error !== 'no-speech') stopVoice();
-  };
-
-  _voiceRecog.onend = () => {
-    // Restart automatically if still active
-    if (_voiceActive) {
-      try { _voiceRecog.start(); } catch(e) {}
-    }
-  };
-
-  _voiceRecog.start();
-  _voiceActive = true;
-
-  const btn = document.getElementById('ql-voice-btn');
-  if (btn) {
-    btn.style.background = 'rgba(224,64,64,0.2)';
-    btn.style.borderColor = 'rgba(224,64,64,0.6)';
-    btn.innerHTML = '⏹';
-    btn.title = 'Toca para detener';
-  }
-  const hint = document.getElementById('ql-input-hint');
-  if (hint) { hint.textContent = '🎤 Escuchando… di los números de las estampas'; hint.style.color = 'var(--red)'; }
-}
-
-function stopVoice() {
-  _voiceActive = false;
-  if (_voiceRecog) { try { _voiceRecog.stop(); } catch(e) {} _voiceRecog = null; }
-  const btn = document.getElementById('ql-voice-btn');
-  if (btn) { btn.style.background='var(--surface2)'; btn.style.borderColor='var(--border)'; btn.innerHTML='🎤'; }
-  const hint = document.getElementById('ql-input-hint');
-  if (hint) { hint.textContent = `${_qlCurrentTeam ? 'Di o teclea el número de la estampa' : 'Selecciona un equipo primero'}`; hint.style.color='#444'; }
-}
-
-function parseSpokenNumbers(text) {
-  const wordMap = {
-    'uno':1,'dos':2,'tres':3,'cuatro':4,'cinco':5,'seis':6,'siete':7,'ocho':8,
-    'nueve':9,'diez':10,'once':11,'doce':12,'trece':13,'catorce':14,'quince':15,
-    'dieciséis':16,'dieciseis':16,'diecisiete':17,'dieciocho':18,'diecinueve':19,'veinte':20,
-    'one':1,'two':2,'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,
-    'nine':9,'ten':10,'eleven':11,'twelve':12,'thirteen':13,'fourteen':14,'fifteen':15,
-    'sixteen':16,'seventeen':17,'eighteen':18,'nineteen':19,'twenty':20
-  };
-  const nums = [];
-  // Digits
-  const digits = text.match(/\b([1-9]|1\d|20)\b/g);
-  if (digits) digits.forEach(d => nums.push(parseInt(d)));
-  // Words
-  const words = text.split(/[\s,yand]+/);
-  words.forEach(w => { if (wordMap[w]) nums.push(wordMap[w]); });
-  return [...new Set(nums)];
-}
 
 window.selectQLTeam = function(id) {
   _qlCurrentTeam = id;
@@ -960,7 +878,7 @@ window.selectQLTeam = function(id) {
   const panel = document.getElementById('ql-sticker-panel');
   if (!panel) return;
   const hint = document.getElementById('ql-input-hint');
-  if (hint && !_voiceActive) { hint.textContent = `Di o teclea el número de estampa de ${sec.name}`; hint.style.color='#666'; }
+  if (hint) { hint.textContent = `Teclea el número de estampa de ${sec.name}`; hint.style.color='#666'; }
   const stock = window._shopStock;
   let html = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
