@@ -718,9 +718,9 @@ async function loadShopInventory() {
     const invSnap = await getDoc(doc(db, 'shop', 'inventory'));
     window._shopInventory = invSnap.exists() ? (invSnap.data().stock || {}) : {};
   } catch(e) { console.error('inventory load error', e); window._shopInventory = {}; }
-  // Load specials separately so inventory still works if specials fail
+  // Load specials from top-level collection 'shopSpecials'
   try {
-    const specSnap = await getDocs(collection(db, 'shop', 'specials', 'items'));
+    const specSnap = await getDocs(collection(db, 'shopSpecials'));
     window._shopSpecials = [];
     specSnap.forEach(d => window._shopSpecials.push({ id: d.id, ...d.data() }));
     window._shopSpecials.sort((a,b) => b.ts - a.ts);
