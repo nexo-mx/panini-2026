@@ -1169,6 +1169,13 @@ function updateSaleUI() {
   });
 }
 
+// Ordena códigos según su posición real en el álbum (QUICK_SECTIONS order)
+function albumSortEntries(entries) {
+  const allCodes = QUICK_SECTIONS.flatMap(s => s.codes);
+  const idx = code => { const i = allCodes.indexOf(code); return i === -1 ? 99999 : i; };
+  return entries.slice().sort((a,b) => idx(a[0]) - idx(b[0]));
+}
+
 window.finalizeSale = function() {
   if (!_saleCart.length) { alert('No hay estampas en la venta.'); return; }
 
@@ -1177,8 +1184,7 @@ window.finalizeSale = function() {
   _saleCart.forEach(x => { grouped[x.code] = (grouped[x.code]||0)+1; });
 
   // Build summary HTML
-  const rows = Object.entries(grouped)
-    .sort((a,b) => a[0].localeCompare(b[0]))
+  const rows = albumSortEntries(Object.entries(grouped))
     .map(([code, qty]) => {
       const unitPrice = isCodPremium(code) ? 10 : 5;
       const sub = qty * unitPrice;
@@ -1307,7 +1313,7 @@ async function renderSalesHistory() {
         </div>
       </div>`;
     html += sales.map(s => {
-      const codes = Object.entries(s.items||{}).map(([c,n])=>n>1?`${c}×${n}`:c).join(', ');
+      const codes = albumSortEntries(Object.entries(s.items||{})).map(([c,n])=>n>1?`${c}×${n}`:c).join(', ');
       return `
         <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
