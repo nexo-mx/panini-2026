@@ -738,6 +738,8 @@ function isCodPremium(code) {
   if (code === '00 1') return true;
   if (code.startsWith('FWC ')) return true;
   if (code.startsWith('CC ')) return true;
+  // Escudo = estampa #1 de cualquier equipo
+  if (code.endsWith(' 1')) return true;
   return false;
 }
 
@@ -1317,13 +1319,19 @@ async function renderSalesHistory() {
       return `
         <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
-            <div>
+            <div style="flex:1;min-width:0;">
               <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;">${s.dateStr||'—'}</div>
               <div style="font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:1px;color:#aaa;margin-top:4px;word-break:break-all;">${codes}</div>
             </div>
-            <div style="text-align:right;flex-shrink:0;">
+            <div style="text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
               <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;">${s.count} estampas</div>
               <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--red);">$${s.total}</div>
+              <button onclick="revertSale('${s.id}', ${JSON.stringify(s.items||{}).replace(/'/g,'\'').replace(/"/g,'&quot;')})"
+                style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;
+                  padding:5px 10px;background:rgba(240,160,32,0.1);border:1px solid rgba(240,160,32,0.3);
+                  border-radius:6px;color:#f0a020;cursor:pointer;white-space:nowrap;">
+                ↩ Revertir
+              </button>
             </div>
           </div>
         </div>`;
@@ -1333,6 +1341,33 @@ async function renderSalesHistory() {
     container.innerHTML = `<p style="color:var(--red);font-family:'DM Mono',monospace;font-size:12px;padding:12px;">Error: ${e.message}</p>`;
   }
 }
+
+
+// ── REVERTIR VENTA — suma de vuelta lo que se restó ──────────
+window.revertSale = async function(saleId, itemsJson) {
+  const items = typeof itemsJson === 'string' ? JSON.parse(itemsJson.replace(/&quot;/g,'"')) : itemsJson;
+  const codes = Object.keys(items);
+  const preview = albumSortEntries(Object.entries(items))
+    .map(([c,n]) => n>1 ? `${c}×${n}` : c).join(', ');
+
+  if (!confirm(`¿Revertir esta venta y devolver al inventario?\n\n${preview}\n\nEsto suma de vuelta las cantidades indicadas.`)) return;
+
+  // Sumar de vuelta al stock
+  codes.forEach(code => {
+    window._shopStock[code] = (window._shopStock[code] || 0) + (items[code] || 0);
+  });
+
+  try {
+    await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
+    // Borrar registro de la venta
+    await deleteDoc(doc(db, 'sales', saleId));
+    showStatus('✓ Venta revertida — inventario restaurado', 4000);
+    renderSalesHistory();
+    loadAndRenderShopAdmin();
+  } catch(e) {
+    alert('Error al revertir: ' + e.message);
+  }
+};
 
 window.openQuickLoad   = window.openQuickLoad;
 window.selectQLTeam    = window.selectQLTeam;
