@@ -724,7 +724,7 @@ window.loadAndRenderShopAdmin = loadAndRenderShopAdmin;
 
 
 // ═══════════════════════════════════════════════════════════════
-// CARGA RÁPIDA — selecciona equipo, tap por tap
+// CARGA RÁPIDA & VENTA RÁPIDA & VENTA NUEVA — v2
 // ═══════════════════════════════════════════════════════════════
 const QUICK_SECTIONS = [
   { id:'FWC', name:'Introducción / FWC', flag:'🏆', codes: ['00 1', ...Array.from({length:19},(_,i)=>`FWC ${i+1}`)] },
@@ -732,183 +732,181 @@ const QUICK_SECTIONS = [
   ...ADMIN_TEAMS.map(t => ({ id:t.code, name:t.name, flag:t.flag, codes: Array.from({length:20},(_,i)=>`${t.code} ${i+1}`) }))
 ];
 
-let _qlCurrentTeam = null;
-let _voiceRecog    = null;
-let _voiceActive   = false;
+// Stickers that cost $10 (shields / FWC)
+function isCodPremium(code) {
+  if (!code) return false;
+  if (code === '00 1') return true;
+  if (code.startsWith('FWC ')) return true;
+  if (code.startsWith('CC ')) return true;
+  return false;
+}
 
+let _qlCurrentTeam = null;
+// Undo stack: array of {code, prevQty}
+let _qlUndoStack   = [];
+
+// ── VENTA NUEVA state ────────────────────────────────────────
+let _saleCart = [];   // [{code, price}]
+let _salePrevStocks = {}; // code → stock before sale
+
+// ── helpers ──────────────────────────────────────────────────
+function qlChipColors(qty) {
+  return {
+    bg:     qty===0?'var(--surface2)':qty===1?'rgba(48,192,96,0.2)':qty===2?'rgba(48,128,232,0.2)':'rgba(255,96,48,0.2)',
+    border: qty===0?'var(--border)'  :qty===1?'rgba(48,192,96,0.5)' :qty===2?'rgba(48,128,232,0.5)' :'rgba(255,96,48,0.5)',
+    color:  qty===0?'#555':qty===1?'var(--green)':qty===2?'var(--blue)':'var(--orange)',
+  };
+}
+
+function qlStickerGrid(sec, extraOnClick) {
+  const stock = window._shopStock;
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:10px;padding:4px;">`;
+  for (const code of sec.codes) {
+    const qty  = stock[code] || 0;
+    const holo = isHoloAdmin(code);
+    const num  = code.split(' ').slice(1).join(' ');
+    const c = qlChipColors(qty);
+    const premium = isCodPremium(code);
+    html += `
+      <div id="qlc-${code.replace(/ /g,'_')}" onclick="${extraOnClick}('${code}')"
+        style="background:${c.bg};border:2px solid ${c.border};border-radius:12px;padding:12px 6px 10px;
+          text-align:center;cursor:pointer;transition:all 0.12s;user-select:none;
+          -webkit-tap-highlight-color:transparent;position:relative;">
+        ${premium ? `<div style="position:absolute;top:4px;right:5px;font-size:9px;color:#f0a020;font-family:'DM Mono',monospace;">$10</div>` : ''}
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:1px;color:#666;margin-bottom:5px;">${holo?'✨':''} ${num}</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:34px;line-height:1;color:${c.color};">${qty}</div>
+      </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+// ── CARGA RÁPIDA / VENTA RÁPIDA ──────────────────────────────
 window.openQuickLoad = function(mode = 'add') {
   window._qlMode = mode;
+  _qlUndoStack = [];
   const existing = document.getElementById('ql-overlay');
-  if (existing) { closeQuickLoad(); return; }
+  if (existing) { existing.remove(); return; }
   const overlay = document.createElement('div');
   overlay.id = 'ql-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1000;display:flex;flex-direction:column;backdrop-filter:blur(6px);';
+
+  const isSell = mode === 'sell';
+  const accentColor = isSell ? 'var(--red)' : '#f0a020';
+  const accentRgba  = isSell ? 'rgba(224,64,64,0.15)' : 'rgba(240,160,32,0.15)';
+  const accentBdr   = isSell ? 'rgba(224,64,64,0.3)' : 'rgba(240,160,32,0.3)';
+  const title       = isSell ? '💸 VENTA RÁPIDA' : '⚡ CARGA RÁPIDA';
+  const badge       = isSell ? 'RESTAR −1' : 'SUMAR +1';
+
   overlay.innerHTML = `
     <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0;">
-      <span id="ql-mode-title" style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:#f0a020;">⚡ CARGA RÁPIDA</span>
-      <span id="ql-mode-badge" style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;padding:3px 10px;border-radius:4px;background:rgba(240,160,32,0.15);color:#f0a020;border:1px solid rgba(240,160,32,0.3);">SUMAR +1</span>
-      <button onclick="closeQuickLoad()" style="margin-left:auto;background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:${accentColor};">${title}</span>
+      <span style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;padding:3px 10px;border-radius:4px;background:${accentRgba};color:${accentColor};border:1px solid ${accentBdr};">${badge}</span>
+      <button id="ql-undo-btn" onclick="qlUndo()" title="Deshacer última acción"
+        style="margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;
+          padding:6px 14px;background:rgba(128,128,128,0.12);border:1px solid rgba(128,128,128,0.3);
+          border-radius:7px;color:#888;cursor:pointer;transition:all 0.15s;" disabled>
+        ↩ Deshacer
+      </button>
+      <button onclick="closeQuickLoad()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;padding:0 4px;">✕</button>
     </div>
     <div style="display:flex;flex:1;overflow:hidden;">
-
       <!-- Team list -->
-      <div id="ql-team-list" style="width:140px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--bg);-webkit-overflow-scrolling:touch;">
+      <div id="ql-team-list" style="width:130px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--bg);-webkit-overflow-scrolling:touch;">
         ${QUICK_SECTIONS.map(s => `
           <div class="ql-team-item" onclick="selectQLTeam('${s.id}')" id="qlt-${s.id}"
-            style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;transition:background 0.15s;">
-            <span style="font-size:16px;">${s.flag}</span>
-            <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;">${s.name}</span>
+            style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;transition:background 0.15s;">
+            <span style="font-size:17px;">${s.flag}</span>
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;line-height:1.2;">${s.name}</span>
           </div>`).join('')}
       </div>
-
-      <!-- Right side: stickers + input bar -->
+      <!-- Right side: sticker grid -->
       <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
-
-        <!-- Sticker grid -->
         <div id="ql-sticker-panel" style="flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch;">
           <p style="color:#444;font-family:'DM Mono',monospace;font-size:12px;text-align:center;margin-top:40px;">← Selecciona un equipo</p>
         </div>
-
-        <!-- Input bar: numpad + voice -->
-        <div id="ql-input-bar" style="border-top:1px solid var(--border);background:var(--surface);padding:12px 14px;flex-shrink:0;">
-          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#444;letter-spacing:2px;margin-bottom:10px;text-align:center;" id="ql-input-hint">Selecciona un equipo primero</div>
-
-          <!-- Number display -->
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-            <div id="ql-numpad-display"
-              style="flex:1;font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:4px;color:#f0a020;
-                background:var(--surface2);border:1px solid var(--border);border-radius:8px;
-                padding:8px 16px;text-align:center;min-width:0;">
-              —
-            </div>
-  
-          </div>
-
-          <!-- Numpad -->
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">
-            ${[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20].map(n =>
-              `<button onclick="qlNumInput(${n})"
-                style="font-family:'Bebas Neue',sans-serif;font-size:18px;padding:10px 4px;
-                  background:var(--surface2);border:1px solid var(--border);border-radius:8px;
-                  color:#888;cursor:pointer;transition:all 0.15s;-webkit-tap-highlight-color:transparent;"
-                onmousedown="this.style.background='rgba(240,160,32,0.2)';this.style.color='#f0a020';"
-                onmouseup="this.style.background='var(--surface2)';this.style.color='#888';"
-                ontouchstart="this.style.background='rgba(240,160,32,0.2)';this.style.color='#f0a020';"
-                ontouchend="this.style.background='var(--surface2)';this.style.color='#888';">
-                ${n}
-              </button>`).join('')}
-            <button onclick="qlClearLast()"
-              style="font-family:'Bebas Neue',sans-serif;font-size:14px;padding:10px 4px;
-                background:rgba(224,64,64,0.1);border:1px solid rgba(224,64,64,0.3);border-radius:8px;
-                color:var(--red);cursor:pointer;grid-column:span 2;">
-              ✕ Borrar
-            </button>
-            <button onclick="qlSetAll(_qlCurrentTeam, 0)"
-              style="font-family:'Bebas Neue',sans-serif;font-size:12px;padding:10px 4px;
-                background:rgba(224,64,64,0.08);border:1px solid rgba(224,64,64,0.2);border-radius:8px;
-                color:#a04040;cursor:pointer;grid-column:span 2;letter-spacing:1px;">
-              VACIAR TODO
-            </button>
-          </div>
+        <div style="border-top:1px solid var(--border);background:var(--surface);padding:10px 14px;flex-shrink:0;display:flex;gap:8px;align-items:center;">
+          <button onclick="qlSetAll(_qlCurrentTeam, 0)"
+            style="font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;padding:8px 14px;
+              background:rgba(224,64,64,0.08);border:1px solid rgba(224,64,64,0.25);border-radius:7px;color:#a04040;cursor:pointer;">
+            ✕ Vaciar equipo
+          </button>
+          <div id="ql-flash" style="flex:1;font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;color:${accentColor};text-align:right;opacity:0;transition:opacity 0.2s;"></div>
         </div>
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  // Update UI for mode
-  const title = document.getElementById('ql-mode-title');
-  const badge = document.getElementById('ql-mode-badge');
-  if (mode === 'sell') {
-    if (title) { title.textContent = '💸 VENTA RÁPIDA'; title.style.color = 'var(--red)'; }
-    if (badge) { badge.textContent = 'RESTAR -1'; badge.style.background='rgba(224,64,64,0.15)'; badge.style.color='var(--red)'; badge.style.borderColor='rgba(224,64,64,0.3)'; }
-  }
   selectQLTeam('MEX');
 };
 
 window.closeQuickLoad = function() {
   const overlay = document.getElementById('ql-overlay');
   if (overlay) overlay.remove();
+  _qlUndoStack = [];
 };
-
-// Called when user taps a number on numpad or voice detects one
-window.qlNumInput = function(num) {
-  if (!_qlCurrentTeam) return;
-  const sec  = QUICK_SECTIONS.find(s => s.id === _qlCurrentTeam);
-  if (!sec)  return;
-  const code = sec.codes[num - 1]; // num is 1-based
-  if (!code) return;
-
-  const isSell = window._qlMode === 'sell';
-  const cur  = window._shopStock[code] || 0;
-  const next = isSell ? Math.max(0, cur - 1) : cur + 1;
-  window._shopStock[code] = next;
-  updateQLChip(code, next);
-  scheduleQLSave();
-
-  // Flash the display
-  const display = document.getElementById('ql-numpad-display');
-  if (display) {
-    display.textContent = `${num} → ×${next}`;
-    display.style.color = isSell ? 'var(--red)' : 'var(--green)';
-    setTimeout(() => { display.textContent = '—'; display.style.color = isSell ? 'var(--red)' : '#f0a020'; }, 900);
-  }
-  // Flash numpad button
-  const btn = document.querySelector(`#ql-input-bar button[onclick="qlNumInput(${num})"]`);
-  if (btn) {
-    btn.style.background = 'rgba(48,192,96,0.25)';
-    btn.style.color = 'var(--green)';
-    btn.style.borderColor = 'rgba(48,192,96,0.5)';
-    setTimeout(() => { btn.style.background='var(--surface2)'; btn.style.color='#888'; btn.style.borderColor='var(--border)'; }, 600);
-  }
-};
-
-window.qlClearLast = function() {
-  const display = document.getElementById('ql-numpad-display');
-  if (display) { display.textContent = '—'; display.style.color = '#f0a020'; }
-};
-
-
 
 window.selectQLTeam = function(id) {
   _qlCurrentTeam = id;
   document.querySelectorAll('.ql-team-item').forEach(el => el.style.background = '');
   const selected = document.getElementById(`qlt-${id}`);
-  if (selected) selected.style.background = 'rgba(240,160,32,0.12)';
+  if (selected) { selected.style.background = 'rgba(240,160,32,0.12)'; selected.scrollIntoView({block:'nearest'}); }
   const sec = QUICK_SECTIONS.find(s => s.id === id);
   if (!sec) return;
   const panel = document.getElementById('ql-sticker-panel');
   if (!panel) return;
-  const hint = document.getElementById('ql-input-hint');
-  if (hint) { hint.textContent = `Teclea el número de estampa de ${sec.name}`; hint.style.color='#666'; }
-  const stock = window._shopStock;
-  let html = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
       <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;color:white;">${sec.flag} ${sec.name}</span>
-      <button onclick="qlSetAll('${id}', 0)" style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;padding:5px 12px;background:rgba(224,64,64,0.15);color:var(--red);border:1px solid rgba(224,64,64,0.35);border-radius:5px;cursor:pointer;">✕ Vaciar</button>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px;">`;
-  for (const code of sec.codes) {
-    const qty  = stock[code] || 0;
-    const holo = isHoloAdmin(code);
-    const num  = code.split(' ').slice(1).join(' ');
-    const bg     = qty===0?'var(--surface2)':qty===1?'rgba(48,192,96,0.2)':qty===2?'rgba(48,128,232,0.2)':'rgba(255,96,48,0.2)';
-    const border = qty===0?'var(--border)'  :qty===1?'rgba(48,192,96,0.5)' :qty===2?'rgba(48,128,232,0.5)' :'rgba(255,96,48,0.5)';
-    const color  = qty===0?'#555':qty===1?'var(--green)':qty===2?'var(--blue)':'var(--orange)';
-    html += `
-      <div id="qlc-${code.replace(/ /g,'_')}" onclick="qlTap('${code}')"
-        style="background:${bg};border:2px solid ${border};border-radius:10px;padding:10px 6px;
-          text-align:center;cursor:pointer;transition:all 0.12s;user-select:none;-webkit-tap-highlight-color:transparent;">
-        <div style="font-family:'Bebas Neue',sans-serif;font-size:11px;letter-spacing:1px;color:#555;margin-bottom:4px;">${holo?'✨':''} ${num}</div>
-        <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;line-height:1;color:${color};">${qty}</div>
-      </div>`;
-  }
-  html += `</div>`;
-  panel.innerHTML = html;
+    ${qlStickerGrid(sec, 'qlTap')}`;
 };
 
 window.qlTap = function(code) {
-  // Extract number from code (e.g. "MEX 7" → 7) and use qlNumInput
-  const num = parseInt(code.split(' ').pop());
-  if (!isNaN(num)) qlNumInput(num);
+  if (!_qlCurrentTeam) return;
+  const isSell = window._qlMode === 'sell';
+  const cur  = window._shopStock[code] || 0;
+  const next = isSell ? Math.max(0, cur - 1) : cur + 1;
+
+  // Push undo
+  _qlUndoStack.push({ code, prevQty: cur });
+  const undoBtn = document.getElementById('ql-undo-btn');
+  if (undoBtn) { undoBtn.disabled = false; undoBtn.style.color='#f0a020'; undoBtn.style.borderColor='rgba(240,160,32,0.4)'; undoBtn.style.background='rgba(240,160,32,0.1)'; }
+
+  window._shopStock[code] = next;
+  updateQLChip(code, next);
+  scheduleQLSave();
+
+  // Flash feedback
+  const flash = document.getElementById('ql-flash');
+  if (flash) {
+    const num = code.split(' ').slice(1).join(' ');
+    flash.textContent = `${code.split(' ')[0]} ${num} → ×${next}`;
+    flash.style.color = isSell ? 'var(--red)' : 'var(--green)';
+    flash.style.opacity = '1';
+    clearTimeout(flash._t);
+    flash._t = setTimeout(() => { flash.style.opacity = '0'; }, 1000);
+  }
+};
+
+window.qlUndo = function() {
+  if (!_qlUndoStack.length) return;
+  const { code, prevQty } = _qlUndoStack.pop();
+  window._shopStock[code] = prevQty;
+  updateQLChip(code, prevQty);
+  scheduleQLSave();
+
+  const flash = document.getElementById('ql-flash');
+  if (flash) {
+    flash.textContent = `↩ ${code} → ×${prevQty}`;
+    flash.style.color = '#aaa';
+    flash.style.opacity = '1';
+    clearTimeout(flash._t);
+    flash._t = setTimeout(() => { flash.style.opacity = '0'; }, 900);
+  }
+  if (!_qlUndoStack.length) {
+    const undoBtn = document.getElementById('ql-undo-btn');
+    if (undoBtn) { undoBtn.disabled=true; undoBtn.style.color='#888'; undoBtn.style.borderColor='rgba(128,128,128,0.3)'; undoBtn.style.background='rgba(128,128,128,0.12)'; }
+  }
 };
 
 window.qlSetAll = function(teamId, val) {
@@ -921,13 +919,20 @@ window.qlSetAll = function(teamId, val) {
 function updateQLChip(code, qty) {
   const el = document.getElementById(`qlc-${code.replace(/ /g,'_')}`);
   if (el) {
-    const bg     = qty===0?'var(--surface2)':qty===1?'rgba(48,192,96,0.2)':qty===2?'rgba(48,128,232,0.2)':'rgba(255,96,48,0.2)';
-    const border = qty===0?'var(--border)'  :qty===1?'rgba(48,192,96,0.5)' :qty===2?'rgba(48,128,232,0.5)' :'rgba(255,96,48,0.5)';
-    const color  = qty===0?'#555':qty===1?'var(--green)':qty===2?'var(--blue)':'var(--orange)';
-    el.style.background  = bg;
-    el.style.borderColor = border;
-    el.querySelector('div:last-child').style.color = color;
-    el.querySelector('div:last-child').textContent = qty;
+    const c = qlChipColors(qty);
+    el.style.background  = c.bg;
+    el.style.borderColor = c.border;
+    const numDiv = el.querySelector('div:last-child');
+    if (numDiv) { numDiv.style.color = c.color; numDiv.textContent = qty; }
+  }
+  // Also update sale cart chip if in sale mode
+  const saleChip = document.getElementById(`sc-${code.replace(/ /g,'_')}`);
+  if (saleChip) {
+    const c = qlChipColors(qty);
+    saleChip.style.background  = c.bg;
+    saleChip.style.borderColor = c.border;
+    const nd = saleChip.querySelector('div:last-child');
+    if (nd) { nd.style.color = c.color; nd.textContent = qty; }
   }
   const mainInput = document.getElementById(`iq-${code.replace(/ /g,'_')}`);
   const mainChip  = document.getElementById(`ic-${code.replace(/ /g,'_')}`);
@@ -947,10 +952,392 @@ function scheduleQLSave() {
   }, 800);
 }
 
+// ══════════════════════════════════════════════════════════════
+// VENTA NUEVA — marcar lista del cliente, cuenta corriente
+// ══════════════════════════════════════════════════════════════
+window.openVentaNueva = function() {
+  const existing = document.getElementById('sale-overlay');
+  if (existing) { existing.remove(); return; }
+  _saleCart = [];
+  _salePrevStocks = {};
+  _qlUndoStack = [];
+
+  const overlay = document.createElement('div');
+  overlay.id = 'sale-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:1000;display:flex;flex-direction:column;backdrop-filter:blur(8px);';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border-bottom:2px solid rgba(224,64,64,0.4);padding:12px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:4px;color:var(--red);">🧾 VENTA NUEVA</span>
+      <span style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;padding:3px 10px;border-radius:4px;background:rgba(224,64,64,0.12);color:var(--red);border:1px solid rgba(224,64,64,0.3);">VENTA FÍSICA</span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+        <button id="sale-undo-btn" onclick="saleUndo()" disabled
+          style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;
+            padding:6px 12px;background:rgba(128,128,128,0.1);border:1px solid rgba(128,128,128,0.3);
+            border-radius:7px;color:#666;cursor:pointer;transition:all 0.15s;">
+          ↩ Deshacer
+        </button>
+        <button onclick="closeSale()"
+          style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+      </div>
+    </div>
+    <!-- Total bar -->
+    <div style="background:rgba(224,64,64,0.08);border-bottom:1px solid rgba(224,64,64,0.2);padding:10px 18px;display:flex;align-items:center;gap:16px;flex-shrink:0;">
+      <div>
+        <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;">ESTAMPAS</div>
+        <div id="sale-count" style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:2px;color:white;line-height:1;">0</div>
+      </div>
+      <div style="width:1px;height:36px;background:rgba(255,255,255,0.1);"></div>
+      <div>
+        <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;">TOTAL</div>
+        <div id="sale-total" style="font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:2px;color:var(--red);line-height:1;">$0</div>
+      </div>
+      <div style="flex:1;"></div>
+      <div style="text-align:right;">
+        <div style="font-family:'DM Mono',monospace;font-size:9px;color:#444;letter-spacing:1.5px;margin-bottom:3px;">Normal $5 · Escudos/FWC $10</div>
+        <div id="sale-breakdown" style="font-family:'DM Mono',monospace;font-size:10px;color:#666;"></div>
+      </div>
+    </div>
+    <div style="display:flex;flex:1;overflow:hidden;">
+      <!-- Team list -->
+      <div id="sale-team-list" style="width:130px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--bg);-webkit-overflow-scrolling:touch;">
+        ${QUICK_SECTIONS.map(s => `
+          <div class="sale-team-item" onclick="selectSaleTeam('${s.id}')" id="st-${s.id}"
+            style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;transition:background 0.15s;position:relative;">
+            <span style="font-size:17px;">${s.flag}</span>
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;line-height:1.2;">${s.name}</span>
+            <span id="stbadge-${s.id}" style="display:none;position:absolute;right:6px;top:6px;background:var(--red);color:white;font-family:'DM Mono',monospace;font-size:9px;padding:1px 5px;border-radius:10px;"></span>
+          </div>`).join('')}
+      </div>
+      <!-- Right: sticker grid -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div id="sale-sticker-panel" style="flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch;">
+          <p style="color:#444;font-family:'DM Mono',monospace;font-size:12px;text-align:center;margin-top:40px;">← Selecciona un equipo</p>
+        </div>
+        <!-- Cart preview -->
+        <div style="border-top:1px solid var(--border);background:var(--surface);padding:10px 14px;flex-shrink:0;">
+          <div id="sale-cart-preview" style="font-family:'DM Mono',monospace;font-size:10px;color:#555;min-height:20px;overflow-x:auto;white-space:nowrap;">Sin estampas aún</div>
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            <button onclick="finalizeSale()"
+              style="flex:1;font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;padding:12px;
+                background:rgba(224,64,64,0.2);border:2px solid rgba(224,64,64,0.6);border-radius:10px;
+                color:var(--red);cursor:pointer;transition:all 0.15s;"
+              onmouseenter="this.style.background='rgba(224,64,64,0.3)'" onmouseleave="this.style.background='rgba(224,64,64,0.2)'">
+              ✓ FINALIZAR VENTA
+            </button>
+            <button onclick="cancelSale()"
+              style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;padding:12px 16px;
+                background:rgba(128,128,128,0.08);border:1px solid rgba(128,128,128,0.25);border-radius:10px;
+                color:#555;cursor:pointer;">
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  selectSaleTeam('MEX');
+};
+
+window.closeSale = function() {
+  const overlay = document.getElementById('sale-overlay');
+  if (overlay) overlay.remove();
+  _saleCart = [];
+  _qlUndoStack = [];
+};
+
+window.cancelSale = function() {
+  if (_saleCart.length && !confirm('¿Cancelar esta venta? No se descontará nada del inventario.')) return;
+  closeSale();
+};
+
+let _saleCurrentTeam = null;
+
+window.selectSaleTeam = function(id) {
+  _saleCurrentTeam = id;
+  document.querySelectorAll('.sale-team-item').forEach(el => el.style.background = '');
+  const selected = document.getElementById(`st-${id}`);
+  if (selected) { selected.style.background = 'rgba(224,64,64,0.1)'; selected.scrollIntoView({block:'nearest'}); }
+  const sec = QUICK_SECTIONS.find(s => s.id === id);
+  if (!sec) return;
+  const panel = document.getElementById('sale-sticker-panel');
+  if (!panel) return;
+  const stock = window._shopStock;
+
+  let html = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;color:white;">${sec.flag} ${sec.name}</span>
+      ${isCodPremium(sec.codes[0]) ? `<span style="font-family:'DM Mono',monospace;font-size:10px;color:#f0a020;letter-spacing:2px;background:rgba(240,160,32,0.1);border:1px solid rgba(240,160,32,0.3);padding:3px 8px;border-radius:4px;">$10 c/u</span>` : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:10px;padding:4px;">`;
+
+  for (const code of sec.codes) {
+    const qty  = stock[code] || 0;
+    const holo = isHoloAdmin(code);
+    const num  = code.split(' ').slice(1).join(' ');
+    const inCart = _saleCart.filter(x => x.code === code).length;
+    const premium = isCodPremium(code);
+    const price = premium ? 10 : 5;
+    const c = qlChipColors(qty);
+    const cartBg = inCart > 0 ? 'rgba(224,64,64,0.25)' : c.bg;
+    const cartBdr = inCart > 0 ? 'rgba(224,64,64,0.7)' : c.border;
+    html += `
+      <div id="sc-${code.replace(/ /g,'_')}" onclick="saleTap('${code}')"
+        style="background:${cartBg};border:2px solid ${cartBdr};border-radius:12px;padding:12px 6px 10px;
+          text-align:center;cursor:pointer;transition:all 0.12s;user-select:none;
+          -webkit-tap-highlight-color:transparent;position:relative;">
+        ${inCart > 0 ? `<div style="position:absolute;top:-6px;right:-6px;background:var(--red);color:white;font-family:'Bebas Neue',sans-serif;font-size:13px;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;line-height:1;">${inCart}</div>` : ''}
+        <div style="font-family:'DM Mono',monospace;font-size:9px;color:#f0a020;position:absolute;top:4px;left:5px;">$${price}</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:1px;color:#666;margin-bottom:5px;">${holo?'✨':''} ${num}</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:34px;line-height:1;color:${c.color};">${qty}</div>
+      </div>`;
+  }
+  html += `</div>`;
+  panel.innerHTML = html;
+};
+
+window.saleTap = function(code) {
+  const stock = window._shopStock[code] || 0;
+  const alreadyInCart = _saleCart.filter(x => x.code === code).length;
+
+  // Can't add more than available stock
+  if (alreadyInCart >= stock) {
+    // Flash red
+    const el = document.getElementById(`sc-${code.replace(/ /g,'_')}`);
+    if (el) { const ob = el.style.borderColor; el.style.borderColor='var(--red)'; setTimeout(()=>el.style.borderColor=ob,400); }
+    return;
+  }
+
+  const premium = isCodPremium(code);
+  const price   = premium ? 10 : 5;
+  _saleCart.push({ code, price });
+  _qlUndoStack.push({ type:'sale', code, price });
+
+  const undoBtn = document.getElementById('sale-undo-btn');
+  if (undoBtn) { undoBtn.disabled=false; undoBtn.style.color='#f0a020'; undoBtn.style.borderColor='rgba(240,160,32,0.4)'; undoBtn.style.background='rgba(240,160,32,0.1)'; }
+
+  updateSaleUI();
+  // Refresh chip for this code
+  selectSaleTeam(_saleCurrentTeam);
+  // Re-select current team to refresh grid
+  document.querySelectorAll('.sale-team-item').forEach(el => el.style.background = '');
+  const sel = document.getElementById(`st-${_saleCurrentTeam}`);
+  if (sel) sel.style.background = 'rgba(224,64,64,0.1)';
+};
+
+window.saleUndo = function() {
+  if (!_qlUndoStack.length) return;
+  const last = _qlUndoStack.pop();
+  if (last.type === 'sale') {
+    // Remove last occurrence of that code
+    const idx = _saleCart.map(x=>x.code).lastIndexOf(last.code);
+    if (idx !== -1) _saleCart.splice(idx, 1);
+  }
+  updateSaleUI();
+  selectSaleTeam(_saleCurrentTeam);
+  if (!_qlUndoStack.length) {
+    const undoBtn = document.getElementById('sale-undo-btn');
+    if (undoBtn) { undoBtn.disabled=true; undoBtn.style.color='#666'; undoBtn.style.borderColor='rgba(128,128,128,0.3)'; undoBtn.style.background='rgba(128,128,128,0.1)'; }
+  }
+};
+
+function updateSaleUI() {
+  const total   = _saleCart.reduce((s,x) => s + x.price, 0);
+  const count   = _saleCart.length;
+  const prem    = _saleCart.filter(x=>x.price===10).length;
+  const normal  = count - prem;
+
+  document.getElementById('sale-count').textContent = count;
+  document.getElementById('sale-total').textContent = `$${total}`;
+  const breakdown = [];
+  if (normal) breakdown.push(`${normal}×$5`);
+  if (prem)   breakdown.push(`${prem}×$10`);
+  document.getElementById('sale-breakdown').textContent = breakdown.join(' + ');
+
+  // Cart preview
+  const grouped = {};
+  _saleCart.forEach(x => { grouped[x.code] = (grouped[x.code]||0)+1; });
+  const preview = Object.entries(grouped).map(([c,n]) => n>1?`${c}(×${n})`:c).join(' · ');
+  document.getElementById('sale-cart-preview').textContent = preview || 'Sin estampas aún';
+
+  // Update team badges
+  QUICK_SECTIONS.forEach(sec => {
+    const badge = document.getElementById(`stbadge-${sec.id}`);
+    if (!badge) return;
+    const n = _saleCart.filter(x => sec.codes.includes(x.code)).length;
+    if (n > 0) { badge.style.display='inline'; badge.textContent=n; }
+    else badge.style.display='none';
+  });
+}
+
+window.finalizeSale = function() {
+  if (!_saleCart.length) { alert('No hay estampas en la venta.'); return; }
+
+  const total   = _saleCart.reduce((s,x) => s + x.price, 0);
+  const grouped = {};
+  _saleCart.forEach(x => { grouped[x.code] = (grouped[x.code]||0)+1; });
+
+  // Build summary HTML
+  const rows = Object.entries(grouped)
+    .sort((a,b) => a[0].localeCompare(b[0]))
+    .map(([code, qty]) => {
+      const unitPrice = isCodPremium(code) ? 10 : 5;
+      const sub = qty * unitPrice;
+      return `<tr>
+        <td style="padding:6px 10px;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:1px;color:white;">${code}</td>
+        <td style="padding:6px 10px;font-family:'DM Mono',monospace;font-size:12px;color:#888;text-align:center;">×${qty}</td>
+        <td style="padding:6px 10px;font-family:'DM Mono',monospace;font-size:12px;color:#aaa;text-align:right;">$${unitPrice}c/u</td>
+        <td style="padding:6px 10px;font-family:'Bebas Neue',sans-serif;font-size:15px;color:var(--red);text-align:right;">$${sub}</td>
+      </tr>`;
+    }).join('');
+
+  const prem   = _saleCart.filter(x=>x.price===10).length;
+  const normal = _saleCart.length - prem;
+  const now    = new Date();
+  const dateStr = now.toLocaleString('es-MX', {dateStyle:'short',timeStyle:'short'});
+
+  const modal = document.createElement('div');
+  modal.id = 'sale-summary-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.96);z-index:2000;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:var(--surface);border:2px solid rgba(224,64,64,0.4);border-radius:16px;max-width:480px;width:calc(100%-32px);max-height:90vh;overflow-y:auto;padding:0;">
+      <!-- Header -->
+      <div style="padding:20px 20px 16px;border-bottom:1px solid var(--border);">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:4px;color:var(--red);">✓ RESUMEN DE VENTA</div>
+        <div style="font-family:'DM Mono',monospace;font-size:11px;color:#555;margin-top:4px;">${dateStr}</div>
+      </div>
+      <!-- Table -->
+      <div style="padding:8px 0;">
+        <table style="width:100%;border-collapse:collapse;">
+          ${rows}
+        </table>
+      </div>
+      <!-- Totals -->
+      <div style="padding:14px 20px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;gap:20px;align-items:flex-end;">
+        <div>
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;">ESTAMPAS</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;color:white;">${_saleCart.length}</div>
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;">${normal} normales · ${prem} escudos/FWC</div>
+        </div>
+        <div style="flex:1;text-align:right;">
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;">TOTAL A COBRAR</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;letter-spacing:3px;color:var(--red);line-height:1;">$${total}</div>
+        </div>
+      </div>
+      <!-- Actions -->
+      <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px;">
+        <button onclick="confirmSale()"
+          style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;padding:14px;width:100%;
+            background:rgba(224,64,64,0.2);border:2px solid rgba(224,64,64,0.6);border-radius:10px;
+            color:var(--red);cursor:pointer;">
+          ✓ CONFIRMAR — DESCONTAR INVENTARIO
+        </button>
+        <button onclick="document.getElementById('sale-summary-modal').remove()"
+          style="font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:1px;padding:10px;width:100%;
+            background:none;border:1px solid rgba(128,128,128,0.3);border-radius:10px;color:#555;cursor:pointer;">
+          ← Volver y seguir marcando
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+};
+
+window.confirmSale = async function() {
+  const total   = _saleCart.reduce((s,x) => s + x.price, 0);
+  const grouped = {};
+  _saleCart.forEach(x => { grouped[x.code] = (grouped[x.code]||0)+1; });
+
+  // Deduct from inventory
+  Object.entries(grouped).forEach(([code, qty]) => {
+    window._shopStock[code] = Math.max(0, (window._shopStock[code]||0) - qty);
+  });
+
+  // Save inventory
+  try {
+    await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
+  } catch(e) { console.error('Error guardando inventario:', e); }
+
+  // Save sale to history
+  const saleRecord = {
+    date: Date.now(),
+    dateStr: new Date().toLocaleString('es-MX', {dateStyle:'short',timeStyle:'short'}),
+    items: grouped,
+    total,
+    count: _saleCart.length,
+  };
+  try {
+    await addDoc(collection(db, 'sales'), saleRecord);
+  } catch(e) { console.error('Error guardando historial:', e); }
+
+  // Close everything and show toast
+  document.getElementById('sale-summary-modal')?.remove();
+  closeSale();
+  loadAndRenderShopAdmin();
+  renderSalesHistory();
+  showStatus(`✓ Venta registrada — $${total} — ${_saleCart.length} estampas descontadas`, 4000);
+};
+
+// ── HISTORIAL DE VENTAS ──────────────────────────────────────
+async function renderSalesHistory() {
+  const container = document.getElementById('sales-history-container');
+  if (!container) return;
+  container.innerHTML = `<p style="color:#555;font-family:'DM Mono',monospace;font-size:12px;text-align:center;padding:20px;">Cargando historial…</p>`;
+  try {
+    const snap = await getDocs(collection(db, 'sales'));
+    const sales = [];
+    snap.forEach(d => sales.push({id:d.id, ...d.data()}));
+    sales.sort((a,b) => b.date - a.date);
+    if (!sales.length) { container.innerHTML = `<p style="color:#555;font-family:'DM Mono',monospace;font-size:12px;text-align:center;padding:20px;">Sin ventas registradas aún</p>`; return; }
+
+    let grandTotal = 0, grandCount = 0;
+    sales.forEach(s => { grandTotal += s.total||0; grandCount += s.count||0; });
+
+    let html = `
+      <div style="display:flex;gap:20px;margin-bottom:16px;flex-wrap:wrap;">
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 18px;">
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;">VENTAS TOTALES</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:32px;color:var(--red);">${sales.length}</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 18px;">
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;">ESTAMPAS VENDIDAS</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:32px;color:var(--red);">${grandCount}</div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 18px;">
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;">RECAUDADO</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:32px;color:var(--red);">$${grandTotal}</div>
+        </div>
+      </div>`;
+    html += sales.map(s => {
+      const codes = Object.entries(s.items||{}).map(([c,n])=>n>1?`${c}×${n}`:c).join(', ');
+      return `
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+            <div>
+              <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;">${s.dateStr||'—'}</div>
+              <div style="font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:1px;color:#aaa;margin-top:4px;word-break:break-all;">${codes}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-family:'DM Mono',monospace;font-size:10px;color:#555;">${s.count} estampas</div>
+              <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--red);">$${s.total}</div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = `<p style="color:var(--red);font-family:'DM Mono',monospace;font-size:12px;padding:12px;">Error: ${e.message}</p>`;
+  }
+}
+
 window.openQuickLoad   = window.openQuickLoad;
 window.selectQLTeam    = window.selectQLTeam;
 window.qlTap           = window.qlTap;
 window.qlSetAll        = window.qlSetAll;
+window.openVentaNueva  = window.openVentaNueva;
+window.selectSaleTeam  = window.selectSaleTeam;
+window.saleTap         = window.saleTap;
+window.finalizeSale    = window.finalizeSale;
+window.confirmSale     = window.confirmSale;
+window.renderSalesHistory = window.renderSalesHistory;
 
 // ═══════════════════════════════════════════════════════════════
 // ESCÁNER OCR — lee nomenclatura de estampas con la cámara
@@ -1741,12 +2128,22 @@ tbody td { padding:10px 14px; font-size:13px; }
       <button onclick="exportShopText()" class="btn-refresh" style="color:var(--green);border-color:rgba(48,192,96,0.4);">📋 Exportar stock</button>
       <button onclick="openQuickLoad('add')" class="btn-refresh" style="color:#f0a020;border-color:rgba(240,160,32,0.4);">⚡ Carga Rápida</button>
       <button onclick="openQuickLoad('sell')" class="btn-refresh" style="color:var(--red);border-color:rgba(224,64,64,0.4);">💸 Venta Rápida</button>
+      <button onclick="openVentaNueva()" class="btn-refresh" style="color:white;background:rgba(224,64,64,0.18);border-color:rgba(224,64,64,0.6);font-weight:700;">🧾 Venta Nueva</button>
       <button onclick="openScanner()" class="btn-refresh" style="color:#60d0ff;border-color:rgba(96,208,255,0.4);">📷 Escanear</button>
       <button onclick="openSpecialsAdmin()" class="btn-refresh" style="color:#d4a820;border-color:rgba(212,168,32,0.4);">⭐ Especiales</button>
       <span id="shop-admin-saved" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--green);display:none;">✓ Guardado</span>
     </div>
     <div class="panel" id="shop-admin-panel">
       <p style="color:#555;font-size:13px;text-align:center;padding:20px;">Cargando inventario…</p>
+    </div>
+
+    <!-- HISTORIAL DE VENTAS -->
+    <div class="section-hdr" style="margin-top:36px;">🧾 Historial de Ventas <span>ADMIN</span></div>
+    <div style="margin-bottom:12px;">
+      <button onclick="renderSalesHistory()" class="btn-refresh" style="color:var(--red);border-color:rgba(224,64,64,0.4);">↻ Actualizar historial</button>
+    </div>
+    <div id="sales-history-container" class="panel">
+      <p style="color:#555;font-size:13px;text-align:center;padding:20px;">Presiona "Actualizar historial" para cargar</p>
     </div>
 
   </div>
