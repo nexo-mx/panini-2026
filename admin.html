@@ -826,8 +826,8 @@ window.qlTap = function(code) {
     } else {
       _saleItems.push({ code });
     }
-    updateVentaChip(code);
-    updateVentaBar();
+    window.updateVentaChip(code);
+    window.updateVentaBar();
     return;
   }
 
@@ -847,8 +847,8 @@ window.qlUndo = function() {
     // Remove last sale item
     if (_saleItems.length === 0) return;
     const last = _saleItems.pop();
-    updateVentaChip(last.code);
-    updateVentaBar();
+    window.updateVentaChip(last.code);
+    window.updateVentaBar();
     return;
   }
   if (_qlUndoStack.length === 0) return;
@@ -867,8 +867,7 @@ window.qlUndo = function() {
 };
 
 // Venta nueva helpers
-function updateVentaBar() {
-  const bar   = document.getElementById('venta-bar');
+window.updateVentaBar = function() {
   const chips = document.getElementById('venta-chips');
   const total = document.getElementById('venta-total');
   if (!chips) return;
@@ -877,21 +876,20 @@ function updateVentaBar() {
     const price = holo ? 10 : 5;
     return `<span style="font-family:'DM Mono',monospace;font-size:11px;padding:3px 8px;
       background:rgba(212,168,32,0.15);border:1px solid rgba(212,168,32,0.4);border-radius:4px;color:#d4a820;">
-      ${x.code}</span>`;
+      ${x.code} $${price}</span>`;
   }).join('');
   const sum = _saleItems.reduce((s,x) => s + (isHoloAdmin(x.code) ? 10 : 5), 0);
   if (total) total.textContent = '$' + sum;
-}
+};
 
-function updateVentaChip(code) {
+window.updateVentaChip = function(code) {
   const el = document.getElementById(`qlc-${code.replace(/ /g,'_')}`);
   if (!el) return;
   const inSale = _saleItems.some(x => x.code === code);
   el.style.outline = inSale ? '3px solid #d4a820' : '';
-  el.style.opacity  = inSale ? '1' : '';
   const label = el.querySelector('.venta-label');
   if (label) label.style.display = inSale ? 'block' : 'none';
-}
+};
 
 window.finalizarVenta = async function() {
   if (_saleItems.length === 0) { alert('No has marcado ninguna estampa'); return; }
@@ -1961,7 +1959,7 @@ tbody td { padding:10px 14px; font-size:13px; }
     </div>
 
     <!-- PEGAR COINCIDENCIAS IA -->
-    <div class="section-hdr" style="margin-top:40px;">🤖 Pegar Coincidencias IA <span>GENERAR VENTA</span></div>
+    <div class="section-hdr" style="margin-top:40px;">📋 Surtir Lista <span>PEGAR COINCIDENCIAS IA</span></div>
     <div class="panel">
       <div class="panel-title">Pega aquí el resultado de Claude/ChatGPT con las coincidencias</div>
       <p style="font-family:'DM Mono',monospace;font-size:11px;color:#444;margin-bottom:12px;line-height:1.6;">
