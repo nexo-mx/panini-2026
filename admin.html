@@ -786,9 +786,25 @@ window.openQuickLoad = function(mode = 'add') {
           </div>`).join('')}
       </div>
 
-      <!-- Sticker grid — full height, no numpad -->
-      <div id="ql-sticker-panel" style="flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch;">
-        <p style="color:#444;font-family:'DM Mono',monospace;font-size:12px;text-align:center;margin-top:40px;">← Selecciona un equipo</p>
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <!-- Batch input — only for carga/venta rapida -->
+        ${!isVenta ? `
+        <div style="padding:10px 12px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0;display:flex;gap:8px;align-items:center;">
+          <input id="ql-batch-input" type="text" placeholder="Ej: 3 7 12 5 18 — Enter para aplicar"
+            style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:7px;
+              padding:8px 12px;color:var(--text);font-family:'DM Mono',monospace;font-size:13px;outline:none;"
+            onkeydown="if(event.key==='Enter') qlBatchInput()">
+          <button onclick="qlBatchInput()"
+            style="font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:1px;padding:8px 16px;
+              background:rgba(240,160,32,0.15);color:#f0a020;border:1px solid rgba(240,160,32,0.4);
+              border-radius:7px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
+            ✓ Aplicar
+          </button>
+        </div>` : ''}
+        <!-- Sticker grid -->
+        <div id="ql-sticker-panel" style="flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch;">
+          <p style="color:#444;font-family:'DM Mono',monospace;font-size:12px;text-align:center;margin-top:40px;">← Selecciona un equipo</p>
+        </div>
       </div>
     </div>
 
@@ -988,9 +1004,66 @@ window.selectQLTeam = function(id) {
 };
 
 window.qlTap = function(code) {
-  // Extract number from code (e.g. "MEX 7" → 7) and use qlNumInput
-  const num = parseInt(code.split(' ').pop());
-  if (!isNaN(num)) qlNumInput(num);
+  const mode    = window._qlMode || 'add';
+  const isVenta = mode === 'venta';
+  const isSell  = mode === 'sell';
+  const cur     = window._shopStock[code] || 0;
+
+  if (isVenta) {
+    // Toggle in sale list
+    const idx = _saleItems.findIndex(x => x.code === code);
+    if (idx >= 0) {
+      _saleItems.splice(idx, 1);
+    } else {
+      _saleItems.push({ code });
+    }
+    window.updateVentaChip(code);
+    window.updateVentaBar();
+    return;
+  }
+
+  // Carga rápida / Venta rápida
+  _qlUndoStack.push({ code, prevQty: cur });
+  if (_qlUndoStack.length > 30) _qlUndoStack.shift();
+
+  const next = isSell ? Math.max(0, cur - 1) : cur + 1;
+  window._shopStock[code] = next;
+  updateQLChip(code, next);
+  scheduleQLSave();
+};
+
+window.qlBatchInput = function() {
+  if (!_qlCurrentTeam) { return; }
+  const input = document.getElementById('ql-batch-input');
+  if (!input) return;
+  const raw = input.value.trim();
+  if (!raw) return;
+
+  const sec  = QUICK_SECTIONS.find(s => s.id === _qlCurrentTeam);
+  if (!sec) return;
+
+  // Parse numbers from input — space, comma or slash separated
+  const nums = raw.split(/[\s,/]+/).map(n => parseInt(n)).filter(n => !isNaN(n) && n >= 1 && n <= sec.codes.length);
+  if (nums.length === 0) { showStatus('⚠️ No se encontraron números válidos'); return; }
+
+  const isSell = window._qlMode === 'sell';
+  let applied = 0;
+
+  nums.forEach(num => {
+    const code = sec.codes[num - 1];
+    if (!code) return;
+    const cur  = window._shopStock[code] || 0;
+    _qlUndoStack.push({ code, prevQty: cur });
+    const next = isSell ? Math.max(0, cur - 1) : cur + 1;
+    window._shopStock[code] = next;
+    updateQLChip(code, next);
+    applied++;
+  });
+
+  if (_qlUndoStack.length > 50) _qlUndoStack.splice(0, _qlUndoStack.length - 50);
+  scheduleQLSave();
+  input.value = '';
+  showStatus(`✅ ${applied} estampa(s) ${isSell ? 'restadas' : 'sumadas'}`);
 };
 
 window.qlSetAll = function(teamId, val) {
