@@ -1658,66 +1658,116 @@ function compressImage(file, maxSize, quality) {
 // IA PASTE + HISTORIAL DE VENTAS
 // ═══════════════════════════════════════════════════════════════
 
+function parseClientList(raw) {
+  // Parses formats like:
+  //   MEX 🇲🇽: 3, 7, 12
+  //   MEX 3, MEX 7
+  //   MEX: 3 7 12
+  const codes = [];
+  const seen  = new Set();
+
+  // Try line-by-line format first: CODE [anything]: num, num
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    const lineUp = line.toUpperCase();
+    // Extract team code (2-3 letters at start)
+    const teamMatch = lineUp.match(/^([A-Z]{2,3})/);
+    if (teamMatch) {
+      const team = teamMatch[1];
+      // Extract all numbers from the rest of the line
+      const nums = line.match(/\d{1,2}/g) || [];
+      for (const n of nums) {
+        const code = `${team} ${parseInt(n)}`;
+        if (!seen.has(code)) { seen.add(code); codes.push(code); }
+      }
+      continue;
+    }
+    // Fallback: inline format MEX 3, ARG 14
+    const inline = lineUp.match(/\b([A-Z]{2,3})\s+(\d{1,2})\b/g) || [];
+    for (const m of inline) {
+      const normalized = m.replace(/\s+/,' ').trim();
+      if (!seen.has(normalized)) { seen.add(normalized); codes.push(normalized); }
+    }
+  }
+  return codes;
+}
+
 window.previewIAPaste = function() {
-  const raw  = document.getElementById('ia-paste-input')?.value || '';
-  const codes = parseIACodes(raw);
+  const raw     = document.getElementById('ia-paste-input')?.value || '';
   const preview = document.getElementById('ia-preview');
   const chipsEl = document.getElementById('ia-chips');
   const totalEl = document.getElementById('ia-total');
-  const countEl = document.getElementById('ia-count');
+  const matchEl = document.getElementById('ia-match-count');
+  const noMatchEl = document.getElementById('ia-nomatch-count');
   if (!preview) return;
 
-  if (codes.length === 0) { preview.style.display = 'none'; return; }
+  const allCodes = parseClientList(raw);
+  if (allCodes.length === 0) { preview.style.display = 'none'; return; }
   preview.style.display = 'block';
 
-  const total = codes.reduce((s,c) => s + (isHoloAdmin(c) ? 10 : 5), 0);
-  chipsEl.innerHTML = codes.map(c => {
-    const holo  = isHoloAdmin(c);
-    const stock = window._shopStock[c] || 0;
-    const ok    = stock > 0;
-    return `<span style="font-family:'DM Mono',monospace;font-size:11px;padding:3px 8px;
-      background:${ok?'rgba(48,192,96,0.12)':'rgba(224,64,64,0.1)'};
-      border:1px solid ${ok?'rgba(48,192,96,0.4)':'rgba(224,64,64,0.3)'};
-      border-radius:4px;color:${ok?'var(--green)':'var(--red)'}" title="${ok?'En stock':'Sin stock'}">
-      ${holo?'✨ ':''}${c} ${ok?'':'⚠️'}
-    </span>`;
-  }).join('');
-  totalEl.textContent = '$' + total;
-  countEl.textContent = `${codes.length} estampas · ${codes.filter(c=>(window._shopStock[c]||0)>0).length} en stock`;
+  const matches   = allCodes.filter(c => (window._shopStock[c]||0) > 0);
+  const noMatches = allCodes.filter(c => (window._shopStock[c]||0) === 0);
+  const total     = matches.reduce((s,c) => s + (isHoloAdmin(c) ? 10 : 5), 0);
+
+  if (matchEl)   matchEl.textContent   = matches.length;
+  if (noMatchEl) noMatchEl.textContent = noMatches.length;
+  if (totalEl)   totalEl.textContent   = '$' + total;
+
+  // Group matches by team
+  const groups = {};
+  for (const code of matches) {
+    const team = code.split(' ')[0];
+    if (!groups[team]) groups[team] = [];
+    groups[team].push(code);
+  }
+
+  let html = '';
+
+  // Matches section
+  if (matches.length > 0) {
+    html += `<div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;color:var(--green);margin-bottom:8px;">✅ EN STOCK — SE PUEDEN VENDER</div>`;
+    for (const [team, teamCodes] of Object.entries(groups)) {
+      const teamDef  = ADMIN_TEAMS.find(t => t.code === team);
+      const teamName = teamDef ? `${teamDef.flag} ${teamDef.name}` : team;
+      const holos    = teamCodes.filter(c => isHoloAdmin(c));
+      const normales = teamCodes.filter(c => !isHoloAdmin(c));
+      html += `<div style="background:rgba(48,192,96,0.06);border:1px solid rgba(48,192,96,0.2);border-radius:8px;padding:10px 12px;margin-bottom:6px;">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">${teamName}</div>
+        ${normales.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">
+          <span style="font-family:'DM Mono',monospace;font-size:9px;color:#555;align-self:center;">$5 · </span>
+          ${normales.map(c=>`<span style="font-family:'DM Mono',monospace;font-size:11px;padding:2px 7px;background:rgba(48,192,96,0.12);border:1px solid rgba(48,192,96,0.3);border-radius:4px;color:var(--green);">${c.split(' ')[1]}</span>`).join('')}
+        </div>` : ''}
+        ${holos.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;">
+          <span style="font-family:'DM Mono',monospace;font-size:9px;color:#a07010;align-self:center;">✨ $10 · </span>
+          ${holos.map(c=>`<span style="font-family:'DM Mono',monospace;font-size:11px;padding:2px 7px;background:rgba(212,168,32,0.12);border:1px solid rgba(212,168,32,0.35);border-radius:4px;color:#d4a820;">${c.split(' ')[1]}</span>`).join('')}
+        </div>` : ''}
+      </div>`;
+    }
+  }
+
+  // No-match section
+  if (noMatches.length > 0) {
+    html += `<div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;color:var(--red);margin:12px 0 8px;">❌ SIN STOCK</div>`;
+    html += `<div style="display:flex;flex-wrap:wrap;gap:5px;">`;
+    html += noMatches.map(c => `<span style="font-family:'DM Mono',monospace;font-size:11px;padding:2px 7px;background:rgba(224,64,64,0.08);border:1px solid rgba(224,64,64,0.25);border-radius:4px;color:var(--red);opacity:0.7;">${c}</span>`).join('');
+    html += `</div>`;
+  }
+
+  chipsEl.innerHTML = html;
+  // Store for generarVentaIA
+  window._iaCodes = matches;
 };
 
-function parseIACodes(raw) {
-  // Match patterns like MEX 3, FWC 12, 00 1
-  const matches = raw.toUpperCase().match(/\b([A-Z]{2,3}\s+\d{1,2}|00\s+1)\b/g) || [];
-  const valid = [];
-  const seen  = new Set();
-  for (const m of matches) {
-    const normalized = m.replace(/\s+/,' ').trim();
-    if (!seen.has(normalized)) { seen.add(normalized); valid.push(normalized); }
-  }
-  return valid;
-}
-
 window.generarVentaIA = async function() {
-  const raw   = document.getElementById('ia-paste-input')?.value || '';
-  const codes = parseIACodes(raw);
-  if (codes.length === 0) { showStatus('⚠️ No se encontraron códigos válidos'); return; }
+  const validCodes = window._iaCodes || [];
+  if (validCodes.length === 0) { showStatus('⚠️ No hay coincidencias para vender'); return; }
 
-  const noStock = codes.filter(c => (window._shopStock[c]||0) === 0);
-  if (noStock.length > 0) {
-    if (!confirm(`⚠️ Sin stock: ${noStock.join(', ')}\n\n¿Continuar igualmente con las que sí hay?`)) return;
-  }
+  const holos    = validCodes.filter(c => isHoloAdmin(c));
+  const normales = validCodes.filter(c => !isHoloAdmin(c));
+  const total    = normales.length * 5 + holos.length * 10;
 
-  const validCodes = codes.filter(c => (window._shopStock[c]||0) > 0);
-  if (validCodes.length === 0) { showStatus('❌ Ninguna estampa tiene stock'); return; }
+  if (!confirm(`¿Confirmar venta?\n\n${normales.length} normal(es) × $5 = $${normales.length*5}\n${holos.length} holograma(s) × $10 = $${holos.length*10}\n\nTOTAL: $${total}\n\n¿Descontar del inventario?`)) return;
 
-  const total = validCodes.reduce((s,c) => s + (isHoloAdmin(c) ? 10 : 5), 0);
-  const lines = validCodes.map(c => `${c} — $${isHoloAdmin(c)?10:5}`);
-  const resumen = `VENTA IA\n${'─'.repeat(24)}\n${lines.join('\n')}\n${'─'.repeat(24)}\nTOTAL: $${total}`;
-
-  if (!confirm(resumen + '\n\n¿Confirmar y descontar del inventario?')) return;
-
-  // Descontar
   validCodes.forEach(c => {
     window._shopStock[c] = Math.max(0, (window._shopStock[c]||0) - 1);
   });
@@ -1726,15 +1776,16 @@ window.generarVentaIA = async function() {
     await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
     await addDoc(collection(db, 'salesHistory'), {
       items: validCodes.map(c => ({ code: c, price: isHoloAdmin(c) ? 10 : 5 })),
-      total,
-      ts: Date.now(),
+      total, ts: Date.now(),
       date: new Date().toLocaleDateString('es-MX'),
-      source: 'ia'
+      source: 'lista'
     });
     document.getElementById('ia-paste-input').value = '';
     document.getElementById('ia-preview').style.display = 'none';
+    window._iaCodes = [];
     showStatus(`✅ Venta confirmada — $${total}`);
     renderShopAdmin();
+    mostrarRecibo(validCodes.map(c => ({ code: c })), total);
   } catch(e) { showStatus('❌ Error: ' + e.message); }
 };
 
@@ -2168,31 +2219,30 @@ tbody td { padding:10px 14px; font-size:13px; }
       <p style="color:#555;font-size:13px;text-align:center;padding:20px;">Cargando inventario…</p>
     </div>
 
-    <!-- PEGAR COINCIDENCIAS IA -->
-    <div class="section-hdr" style="margin-top:40px;">📋 Surtir Lista <span>PEGAR COINCIDENCIAS IA</span></div>
+    <!-- SURTIR LISTA -->
+    <div class="section-hdr" style="margin-top:40px;">📋 Surtir Lista <span>COMPARAR CON INVENTARIO</span></div>
     <div class="panel">
-      <div class="panel-title">Pega aquí el resultado de Claude/ChatGPT con las coincidencias</div>
-      <p style="font-family:'DM Mono',monospace;font-size:11px;color:#444;margin-bottom:12px;line-height:1.6;">
-        Formato esperado: <span style="color:#888;">MEX 3, MEX 7, ARG 14, FWC 5</span> — códigos separados por coma.
+      <div class="panel-title">Pega la lista de faltantes del cliente — el sistema la compara automáticamente con tu stock</div>
+      <p style="font-family:'DM Mono',monospace;font-size:11px;color:#555;margin-bottom:12px;line-height:1.7;">
+        Acepta el formato de la app: <span style="color:#888;">MEX 🇲🇽: 3, 7, 12</span> o simple <span style="color:#888;">MEX 3, MEX 7</span>
       </p>
-      <textarea id="ia-paste-input" placeholder="MEX 3, MEX 7, ARG 14, FWC 5, ESP 1..."
-        style="width:100%;height:80px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;
-          padding:12px;color:var(--text);font-family:'DM Mono',monospace;font-size:13px;
-          resize:none;outline:none;letter-spacing:1px;"
+      <textarea id="ia-paste-input" placeholder="Pega aquí la lista del cliente..."
+        style="width:100%;height:160px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+          padding:12px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;
+          resize:vertical;outline:none;line-height:1.7;"
         oninput="previewIAPaste()"></textarea>
-      <div id="ia-preview" style="margin-top:10px;display:none;">
-        <div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;color:#555;margin-bottom:8px;">PREVISUALIZACIÓN</div>
-        <div id="ia-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
-        <div style="display:flex;align-items:center;gap:16px;">
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--green);" id="ia-total">$0</span>
-          <span style="font-family:'DM Mono',monospace;font-size:11px;color:#555;" id="ia-count">0 estampas</span>
-          <button onclick="generarVentaIA()"
-            style="margin-left:auto;font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:2px;
-              padding:10px 24px;background:linear-gradient(135deg,#a07010,#d4a820);color:#000;
-              border:none;border-radius:8px;cursor:pointer;">
-            ✓ CONFIRMAR VENTA
-          </button>
+
+      <div id="ia-preview" style="margin-top:14px;display:none;">
+        <!-- Stats bar -->
+        <div style="display:flex;gap:16px;flex-wrap:wrap;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;align-items:center;">
+          <div><span style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--green);" id="ia-match-count">0</span><br><span style="font-family:'DM Mono',monospace;font-size:9px;color:#555;letter-spacing:1px;">COINCIDENCIAS</span></div>
+          <div><span style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--red);" id="ia-nomatch-count">0</span><br><span style="font-family:'DM Mono',monospace;font-size:9px;color:#555;letter-spacing:1px;">SIN STOCK</span></div>
+          <div><span style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--green);" id="ia-total">$0</span><br><span style="font-family:'DM Mono',monospace;font-size:9px;color:#555;letter-spacing:1px;">TOTAL</span></div>
+          <button onclick="generarVentaIA()" style="margin-left:auto;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;padding:11px 24px;background:linear-gradient(135deg,#a07010,#d4a820);color:#000;border:none;border-radius:8px;cursor:pointer;">✓ VENDER</button>
         </div>
+
+        <!-- Matches grouped by team -->
+        <div id="ia-chips" style="display:flex;flex-direction:column;gap:10px;"></div>
       </div>
     </div>
 
