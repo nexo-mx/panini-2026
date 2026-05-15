@@ -1789,6 +1789,51 @@ window.generarVentaIA = async function() {
   } catch(e) { showStatus('❌ Error: ' + e.message); }
 };
 
+window.copiarCoincidencias = function() {
+  const codes = window._iaCodes || [];
+  if (codes.length === 0) { showStatus('⚠️ No hay coincidencias aún'); return; }
+
+  // Group by team
+  const groups = {};
+  for (const code of codes) {
+    const team = code.split(' ')[0];
+    if (!groups[team]) groups[team] = [];
+    groups[team].push(code.split(' ')[1]);
+  }
+
+  const holos    = codes.filter(c => isHoloAdmin(c));
+  const normales = codes.filter(c => !isHoloAdmin(c));
+  const total    = normales.length * 5 + holos.length * 10;
+
+  const lines = ['🛒 NEXO — Tengo estas estampas disponibles para ti:', ''];
+  for (const [team, nums] of Object.entries(groups)) {
+    const teamDef  = ADMIN_TEAMS.find(t => t.code === team);
+    const flag     = teamDef?.flag || '';
+    const name     = teamDef?.name || team;
+    lines.push(`${flag} ${name}: ${nums.join(', ')}`);
+  }
+  lines.push('');
+  lines.push(`📦 Total: ${codes.length} estampa(s)`);
+  lines.push(`💰 Total: $${total}`);
+  lines.push('');
+  lines.push('¿Te las aparto? 🤙');
+
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text)
+    .then(() => showStatus('✅ Lista copiada — pégala en WhatsApp'))
+    .catch(() => {
+      // Fallback for mobile
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:88%;max-width:400px;height:60vh;background:#111;color:#eee;border:1px solid #333;border-radius:12px;padding:14px;font-family:DM Mono,monospace;font-size:12px;line-height:1.7;z-index:9999;resize:none;outline:none;';
+      ta.readOnly = true;
+      document.body.appendChild(ta);
+      ta.select();
+      setTimeout(() => ta.remove(), 20000);
+      showStatus('📋 Selecciona y copia el texto');
+    });
+};
+
 window.loadSalesHistory = async function() {
   const panel = document.getElementById('sales-history-panel');
   if (!panel) return;
@@ -2238,7 +2283,19 @@ tbody td { padding:10px 14px; font-size:13px; }
           <div><span style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--green);" id="ia-match-count">0</span><br><span style="font-family:'DM Mono',monospace;font-size:9px;color:#555;letter-spacing:1px;">COINCIDENCIAS</span></div>
           <div><span style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--red);" id="ia-nomatch-count">0</span><br><span style="font-family:'DM Mono',monospace;font-size:9px;color:#555;letter-spacing:1px;">SIN STOCK</span></div>
           <div><span style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--green);" id="ia-total">$0</span><br><span style="font-family:'DM Mono',monospace;font-size:9px;color:#555;letter-spacing:1px;">TOTAL</span></div>
-          <button onclick="generarVentaIA()" style="margin-left:auto;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;padding:11px 24px;background:linear-gradient(135deg,#a07010,#d4a820);color:#000;border:none;border-radius:8px;cursor:pointer;">✓ VENDER</button>
+          <div style="margin-left:auto;display:flex;gap:8px;flex-shrink:0;">
+            <button onclick="copiarCoincidencias()"
+              style="font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:1px;padding:11px 16px;
+                background:rgba(160,96,240,0.15);color:var(--gold);border:1px solid rgba(160,96,240,0.4);
+                border-radius:8px;cursor:pointer;white-space:nowrap;">
+              📋 Copiar
+            </button>
+            <button onclick="generarVentaIA()"
+              style="font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;padding:11px 20px;
+                background:linear-gradient(135deg,#a07010,#d4a820);color:#000;border:none;border-radius:8px;cursor:pointer;">
+              ✓ VENDER
+            </button>
+          </div>
         </div>
 
         <!-- Matches grouped by team -->
