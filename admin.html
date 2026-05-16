@@ -907,6 +907,56 @@ window.updateVentaChip = function(code) {
   if (label) label.style.display = inSale ? 'block' : 'none';
 };
 
+// ── MODAL DE DATOS DEL CLIENTE ───────────────────────────────
+function pedirDatosCliente(onConfirm) {
+  const existing = document.getElementById('client-modal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'client-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px);';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:380px;padding:24px;box-shadow:0 24px 80px rgba(0,0,0,0.7);">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--gold);margin-bottom:4px;">📋 Datos del Cliente</div>
+      <p style="font-family:'DM Mono',monospace;font-size:11px;color:#555;margin-bottom:20px;">Opcional — para llevar el control de la venta</p>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;display:block;margin-bottom:5px;">NOMBRE</label>
+        <input id="client-name" type="text" placeholder="Ej: Carlos G."
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:10px 12px;color:var(--text);font-family:'Barlow',sans-serif;font-size:14px;outline:none;">
+      </div>
+      <div style="margin-bottom:20px;">
+        <label style="font-family:'DM Mono',monospace;font-size:10px;color:#555;letter-spacing:2px;display:block;margin-bottom:5px;">TELÉFONO / WHATSAPP</label>
+        <input id="client-phone" type="tel" placeholder="Ej: 477 123 4567"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:10px 12px;color:var(--text);font-family:'Barlow',sans-serif;font-size:14px;outline:none;">
+      </div>
+
+      <div style="display:flex;gap:10px;">
+        <button onclick="document.getElementById('client-modal').remove()"
+          style="flex:1;font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;padding:11px;background:transparent;color:#555;border:1px solid var(--border);border-radius:8px;cursor:pointer;">
+          Cancelar
+        </button>
+        <button onclick="confirmarConDatos()"
+          style="flex:2;font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:2px;padding:11px;background:linear-gradient(135deg,#a07010,#d4a820);color:#000;border:none;border-radius:8px;cursor:pointer;">
+          ✓ Confirmar Venta
+        </button>
+      </div>
+    </div>`;
+
+  // Store callback
+  window._clientConfirmCb = onConfirm;
+  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  document.getElementById('client-name').focus();
+}
+
+window.confirmarConDatos = function() {
+  const name  = document.getElementById('client-name')?.value.trim() || '';
+  const phone = document.getElementById('client-phone')?.value.trim() || '';
+  document.getElementById('client-modal').remove();
+  if (window._clientConfirmCb) window._clientConfirmCb({ name, phone });
+};
+
 window.finalizarVenta = async function() {
   if (_saleItems.length === 0) { alert('No has marcado ninguna estampa'); return; }
 
@@ -915,35 +965,34 @@ window.finalizarVenta = async function() {
   const total   = holos.length * 10 + normales.length * 5;
 
   // Quick confirm before showing full receipt
-  if (!confirm(`¿Finalizar venta?\n\n${normales.length} normal(es) × $5 = $${normales.length*5}\n${holos.length} holograma(s) × $10 = $${holos.length*10}\n\nTOTAL: $${total}\n\n¿Descontar del inventario y generar recibo?`)) return;
-
-  // Descontar del inventario
-  _saleItems.forEach(x => {
-    window._shopStock[x.code] = Math.max(0, (window._shopStock[x.code] || 0) - 1);
-  });
-
-  // Guardar en Firebase
-  try {
-    await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
-    await addDoc(collection(db, 'salesHistory'), {
-      items: _saleItems.map(x => ({ code: x.code, price: isHoloAdmin(x.code) ? 10 : 5 })),
-      total, ts: Date.now(),
-      date: new Date().toLocaleDateString('es-MX')
+  // Ask for client data before confirming
+  const itemsSnap = [..._saleItems];
+  pedirDatosCliente(async ({ name, phone }) => {
+    // Descontar del inventario
+    itemsSnap.forEach(x => {
+      window._shopStock[x.code] = Math.max(0, (window._shopStock[x.code] || 0) - 1);
     });
-    showStatus(`✅ Venta guardada — $${total}`);
-
-    // Group by team for receipt
-    const itemsCopy = [..._saleItems];
-    _saleItems = [];
-    closeQuickLoad();
-    renderShopAdmin();
-
-    // Show receipt modal
-    mostrarRecibo(itemsCopy, total);
-  } catch(e) { showStatus('❌ Error: ' + e.message); }
+    try {
+      await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
+      await addDoc(collection(db, 'salesHistory'), {
+        items: itemsSnap.map(x => ({ code: x.code, price: isHoloAdmin(x.code) ? 10 : 5 })),
+        total, ts: Date.now(),
+        date: new Date().toLocaleDateString('es-MX'),
+        source: 'venta',
+        clientName: name,
+        clientPhone: phone,
+        status: 'completada'
+      });
+      showStatus(`✅ Venta guardada — $${total}`);
+      _saleItems = [];
+      closeQuickLoad();
+      renderShopAdmin();
+      mostrarRecibo(itemsSnap, total, name, phone);
+    } catch(e) { showStatus('❌ Error: ' + e.message); }
+  });
 };
 
-function mostrarRecibo(items, total) {
+function mostrarRecibo(items, total, clientName = '', clientPhone = '') {
   const existing = document.getElementById('recibo-overlay');
   if (existing) existing.remove();
 
@@ -1015,6 +1064,7 @@ function mostrarRecibo(items, total) {
         <div>
           <div style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:4px;color:var(--green);">✅ VENTA COMPLETADA</div>
           <div style="font-family:'DM Mono',monospace;font-size:10px;color:#444;">${date} · ${time}</div>
+          ${clientName ? `<div style="font-family:'Barlow Condensed',sans-serif;font-size:13px;color:#888;margin-top:3px;">👤 ${clientName}${clientPhone?' · 📱 '+clientPhone:''}</div>` : ''}
         </div>
         <button onclick="document.getElementById('recibo-overlay').remove()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
       </div>
@@ -1766,27 +1816,30 @@ window.generarVentaIA = async function() {
   const normales = validCodes.filter(c => !isHoloAdmin(c));
   const total    = normales.length * 5 + holos.length * 10;
 
-  if (!confirm(`¿Confirmar venta?\n\n${normales.length} normal(es) × $5 = $${normales.length*5}\n${holos.length} holograma(s) × $10 = $${holos.length*10}\n\nTOTAL: $${total}\n\n¿Descontar del inventario?`)) return;
-
-  validCodes.forEach(c => {
-    window._shopStock[c] = Math.max(0, (window._shopStock[c]||0) - 1);
-  });
-
-  try {
-    await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
-    await addDoc(collection(db, 'salesHistory'), {
-      items: validCodes.map(c => ({ code: c, price: isHoloAdmin(c) ? 10 : 5 })),
-      total, ts: Date.now(),
-      date: new Date().toLocaleDateString('es-MX'),
-      source: 'lista'
+  const codesSnap = [...validCodes];
+  pedirDatosCliente(async ({ name, phone }) => {
+    codesSnap.forEach(c => {
+      window._shopStock[c] = Math.max(0, (window._shopStock[c]||0) - 1);
     });
-    document.getElementById('ia-paste-input').value = '';
-    document.getElementById('ia-preview').style.display = 'none';
-    window._iaCodes = [];
-    showStatus(`✅ Venta confirmada — $${total}`);
-    renderShopAdmin();
-    mostrarRecibo(validCodes.map(c => ({ code: c })), total);
-  } catch(e) { showStatus('❌ Error: ' + e.message); }
+    try {
+      await setDoc(doc(db, 'shop', 'inventory'), { stock: window._shopStock }, { merge: false });
+      await addDoc(collection(db, 'salesHistory'), {
+        items: codesSnap.map(c => ({ code: c, price: isHoloAdmin(c) ? 10 : 5 })),
+        total, ts: Date.now(),
+        date: new Date().toLocaleDateString('es-MX'),
+        source: 'lista',
+        clientName: name,
+        clientPhone: phone,
+        status: 'completada'
+      });
+      document.getElementById('ia-paste-input').value = '';
+      document.getElementById('ia-preview').style.display = 'none';
+      window._iaCodes = [];
+      showStatus(`✅ Venta confirmada — $${total}`);
+      renderShopAdmin();
+      mostrarRecibo(codesSnap.map(c => ({ code: c })), total, name, phone);
+    } catch(e) { showStatus('❌ Error: ' + e.message); }
+  });
 };
 
 window.copiarCoincidencias = function() {
@@ -1834,6 +1887,14 @@ window.copiarCoincidencias = function() {
     });
 };
 
+window.toggleSaleStatus = async function(saleId, newStatus) {
+  try {
+    await firestoreUpdateDoc(doc(db, 'salesHistory', saleId), { status: newStatus });
+    showStatus(newStatus === 'completada' ? '✅ Marcada como surtida' : '⏳ Marcada como pendiente');
+    loadSalesHistory();
+  } catch(e) { showStatus('❌ Error: ' + e.message); }
+};
+
 window.loadSalesHistory = async function() {
   const panel = document.getElementById('sales-history-panel');
   if (!panel) return;
@@ -1857,14 +1918,37 @@ window.loadSalesHistory = async function() {
       const date  = s.date || new Date(s.ts).toLocaleDateString('es-MX');
       const time  = new Date(s.ts).toLocaleTimeString('es-MX', {hour:'2-digit',minute:'2-digit'});
       const items = (s.items||[]).map(i => `<span style="font-family:'DM Mono',monospace;font-size:10px;padding:2px 6px;background:rgba(255,255,255,0.05);border-radius:3px;">${isHoloAdmin(i.code)?'✨ ':''}${i.code}</span>`).join(' ');
-      const src   = s.source === 'ia' ? '<span style="font-family:DM Mono,monospace;font-size:9px;color:#555;padding:2px 6px;border:1px solid #222;border-radius:3px;">IA</span>' : '';
-      return `<div style="padding:14px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:16px;">
-        <div style="flex-shrink:0;text-align:center;">
+      const srcLabel = s.source === 'lista' ? 'LISTA' : s.source === 'venta' ? 'VENTA' : 'IA';
+      const srcColor = s.source === 'lista' ? '#3080e8' : s.source === 'venta' ? '#a060f0' : '#555';
+      const isPending = s.status === 'pendiente';
+      const waLink = s.clientPhone ? `https://wa.me/${s.clientPhone.replace(/[^0-9]/g,'')}` : '';
+      return `<div style="padding:14px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:14px;">
+        <div style="flex-shrink:0;text-align:center;min-width:70px;">
           <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--green);">$${s.total}</div>
-          <div style="font-family:'DM Mono',monospace;font-size:9px;color:#444;">${date} ${time}</div>
-          ${src}
+          <div style="font-family:'DM Mono',monospace;font-size:9px;color:#444;">${date}</div>
+          <div style="font-family:'DM Mono',monospace;font-size:9px;color:#444;">${time}</div>
+          <span style="font-family:DM Mono,monospace;font-size:9px;color:${srcColor};padding:1px 5px;border:1px solid ${srcColor}44;border-radius:3px;">${srcLabel}</span>
         </div>
-        <div style="flex:1;display:flex;flex-wrap:wrap;gap:4px;align-items:center;">${items}</div>
+        <div style="flex:1;min-width:0;">
+          ${s.clientName ? `<div style="font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;color:var(--text);margin-bottom:2px;">👤 ${s.clientName}</div>` : ''}
+          ${s.clientPhone ? `<div style="margin-bottom:6px;"><a href="${waLink}" target="_blank" style="font-family:'DM Mono',monospace;font-size:11px;color:#25D366;text-decoration:none;">📱 ${s.clientPhone}</a></div>` : ''}
+          <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px;">${items}</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;
+              padding:3px 10px;border-radius:12px;
+              background:${isPending?'rgba(255,96,48,0.15)':'rgba(48,192,96,0.12)'};
+              color:${isPending?'var(--orange)':'var(--green)'};
+              border:1px solid ${isPending?'rgba(255,96,48,0.4)':'rgba(48,192,96,0.35)'};">
+              ${isPending ? '⏳ PENDIENTE' : '✅ SURTIDA'}
+            </span>
+            <button onclick="toggleSaleStatus('${s.id}', '${isPending?'completada':'pendiente'}')"
+              style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;
+                padding:3px 10px;background:transparent;border:1px solid var(--border);border-radius:6px;
+                color:#555;cursor:pointer;">
+              ${isPending ? '✓ Marcar surtida' : '↩ Marcar pendiente'}
+            </button>
+          </div>
+        </div>
       </div>`;
     }).join('');
   } catch(e) {
